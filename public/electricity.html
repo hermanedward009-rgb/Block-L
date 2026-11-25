@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Block L — Electricity Bills</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <script src="/js/app.js"></script>
+  <script>
+    (async () => {
+      const user = await initShell('electricity');
+      if (!user) return;
+      document.getElementById('pageTitle').textContent = 'Electricity Payment & Round Tracker';
+
+      const res = await fetch('/api/electricity');
+      const data = await res.json();
+      const rooms = ['R-01','R-02','R-03','R-04','R-05','R-06','R-07','R-08','R-09','R-10'];
+
+      document.getElementById('pageContent').innerHTML = `
+        ${data.reminderActive ? `<div class="alert alert-warning" style="display:block;">⚡ Reminder: Only <strong>${data.remainingCount} rooms</strong> remain in Round #${data.currentRound}!</div>` : ''}
+
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+          <h3>Round #${data.currentRound} Status (${data.paidRooms.length}/10 Paid)</h3>
+          ${user.role === 'admin' ? `<button class="btn btn-outline" onclick="startNextRound()">Start Next Round</button>` : ''}
+        </div>
+
+        <div class="grid-cards" style="grid-template-columns: repeat(5, 1fr);">
+          ${rooms.map(rm => {
+            const paid = data.paidRooms.includes(rm);
+            return `
+              <div class="card" style="padding: 14px; text-align:center;">
+                <div style="font-weight:700;">${rm}</div>
+                <span class="badge ${paid ? 'badge-success' : 'badge-warning'}" style="margin-top:6px;">
+                  ${paid ? 'PAID' : 'WAITING'}
+                </span>
+              </div>
+            `;
+          }).join('')}
+        </div>
+
+        <div style="display:grid; grid-template-columns: 380px 1fr; gap: 24px;">
+          <div class="card">
+            <h3 style="margin-bottom: 14px;">Submit Electricity Payment</h3>
+            <form id="elecForm" enctype="multipart/form-data">
+              <div class="form-group">
+                <label>Name of Person Who Paid</label>
+                <input type="text" name="payer_name" value="${user.first_name} ${user.second_name}" class="form-control" required />
+              </div>
+              <div class="form-group">
+                <label>Room Number</label>
+                <select name="room" class="form-control" required>
+                  ${rooms.map(r => `<option value="${r}" ${user.room === r ? 'selected' : ''}>${r}</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Amount Paid</label>
+                <input type="number" name="amount" class="form-control" required />
+              </div>
+              <div class="form-group">
+                <label>Electricity Token</label>
+                <input type="text" name="token" class="form-control" required />
+              </div>
+              <div class="form-group">
+                <label>Transaction Screenshot (Required)</label>
+                <input type="file" name="screenshot" accept="image/*" class="form-control" required />
+              </div>
+              <button type="submit" class="btn btn-primary" style="width:100%;">Submit Payment</button>
+            </form>
+          </div>
+
+          <div class="card">
+            <h3 style="margin-bottom: 14px;">Transaction Records</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Round</th>
+                  <th>Room</th>
+                  <th>Payer</th>
+                  <th>Amount</th>
+                  <th>Token</th>
+                  <th>Receipt</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${data.bills.filter(b => b.status !== 'system').map(b => `
+                  <tr>
+                    <td>#${b.round_number}</td>
+                    <td><strong>${b.room}</strong></td>
+                    <td>${b.payer_name}</td>
+                    <td>${b.amount}</td>
+                    <td><code>${b.token}</code></td>
+                    <td><a href="${b.screenshot}" target="_blank" style="color:var(--primary);">View</a></td>
+                    <td>
+                      ${b.status === 'approved'
+                        ? '<span class="badge badge-success">Approved</span>'
+                        : user.role === 'admin'
+                          ? `<button class="btn btn-primary" style="padding:6px 10px;font-size:12px;" onclick="approveBill(${b.id})">Approve</button>`
+                          : '<span class="badge badge-warning">Pending Admin</span>'
+                      }
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('elecForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const res = await fetch('/api/electricity', { method: 'POST', body: formData });
+        if (res.ok) location.reload();
+      });
+    })();
+
+    async function approveBill(id) {
+      await fetch(`/api/electricity/approve/${id}`, { method: 'POST' });
+      location.reload();
+    }
+
+    async function startNextRound() {
+      await fetch('/api/electricity/next-round', { method: 'POST' });
+      location.reload();
+    }
+  </script>
+</body>
+</html>

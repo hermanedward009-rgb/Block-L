@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Block L — Toilet Cleaning Schedule</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <script src="/js/app.js"></script>
+  <script>
+    (async () => {
+      const user = await initShell('schedule');
+      if (!user) return;
+      document.getElementById('pageTitle').textContent = 'Permanent Toilet Cleaning Timetable';
+
+      const [schedRes, memRes] = await Promise.all([fetch('/api/schedule'), fetch('/api/members')]);
+      const schedule = await schedRes.json();
+      const members = await memRes.json();
+
+      document.getElementById('pageContent').innerHTML = `
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>Facility</th>
+                <th>Assigned Resident</th>
+                ${user.role === 'admin' ? '<th>Admin Assignment</th>' : ''}
+              </tr>
+            </thead>
+            <tbody>
+              ${schedule.map(slot => `
+                <tr>
+                  <td><strong>${slot.day_name}</strong></td>
+                  <td><span class="badge ${slot.toilet_type === 'Large Toilet' ? 'badge-primary' : 'badge-warning'}">${slot.toilet_type}</span></td>
+                  <td>
+                    ${slot.first_name ? `
+                      <div style="display:flex;align-items:center;gap:10px;">
+                        <img src="${slot.avatar}" class="user-avatar-sm" />
+                        <span>${slot.first_name} ${slot.second_name} (${slot.room})</span>
+                      </div>
+                    ` : '<span style="color:var(--text-muted);">Unassigned</span>'}
+                  </td>
+                  ${user.role === 'admin' ? `
+                    <td>
+                      <select class="form-control" style="max-width:240px;" onchange="assignSlot(${slot.id}, this.value)">
+                        <option value="">-- Select Resident --</option>
+                        ${members.filter(m => m.role === 'resident').map(m =>
+                          `<option value="${m.id}" ${slot.assigned_user_id === m.id ? 'selected' : ''}>${m.first_name} ${m.second_name} (${m.room})</option>`
+                        ).join('')}
+                      </select>
+                    </td>
+                  ` : ''}
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    })();
+
+    async function assignSlot(scheduleId, userId) {
+      await fetch('/api/schedule/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schedule_id: scheduleId, user_id: userId })
+      });
+      location.reload();
+    }
+  </script>
+</body>
+</html>

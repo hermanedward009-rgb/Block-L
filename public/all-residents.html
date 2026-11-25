@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Block L — All Residents</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/app.js"></script>
+  <script>
+    const ALL_ROOMS = ['R-01','R-02','R-03','R-04','R-05','R-06','R-07','R-08','R-09','R-10'];
+    let ALL_ACCOUNTS = [];
+
+    (async () => {
+      const user = await initShell('all-residents');
+      if (!user) return;
+      document.getElementById('pageTitle').textContent = 'All Residents & Account Management';
+
+      if (user.role !== 'admin') {
+        document.getElementById('pageContent').innerHTML = `
+          <div class="alert alert-error">Access denied. This page is restricted to the Block L Administrator.</div>
+        `;
+        return;
+      }
+
+      document.getElementById('pageContent').innerHTML = `
+        <div id="resAlert" class="alert alert-success" style="display:none;"></div>
+
+        <div class="card" style="margin-bottom: 24px;">
+          <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:12px; margin-bottom:16px;">
+            <div>
+              <h3 style="font-size:17px;">All Accounts Directory</h3>
+              <p style="font-size:13px; color:var(--text-muted); margin-top:2px;">Edit names, phone numbers, rooms (max 2 per room), status, role, or password.</p>
+            </div>
+            <input type="text" id="searchInput" class="form-control" style="max-width:260px;" placeholder="Search name, phone, or room..." oninput="renderAccountsTable()" />
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Photo</th>
+                  <th>Name</th>
+                  <th>Phone</th>
+                  <th>Room</th>
+                  <th>Role</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="accountsTableBody">
+                <tr><td colspan="7">Loading accounts...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="editModalCard" class="card" style="display:none; max-width:620px; border-color:var(--primary);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+            <h3 style="font-size:17px;">Edit Account Details</h3>
+            <button class="btn btn-outline" style="padding:6px 12px; font-size:12px;" onclick="closeEditModal()">Close</button>
+          </div>
+          <div id="modalError" class="alert alert-error" style="display:none;"></div>
+          <form id="editAccountForm">
+            <input type="hidden" id="editId" />
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+              <div class="form-group">
+                <label>First Name</label>
+                <input type="text" id="editFirstName" class="form-control" required />
+              </div>
+              <div class="form-group">
+                <label>Second Name</label>
+                <input type="text" id="editSecondName" class="form-control" required />
+              </div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+              <div class="form-group">
+                <label>Phone Number (10 digits)</label>
+                <input type="text" id="editPhone" maxlength="10" pattern="\\d{10}" class="form-control" required />
+              </div>
+              <div class="form-group">
+                <label>Room Assignment</label>
+                <select id="editRoom" class="form-control"></select>
+              </div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+              <div class="form-group">
+                <label>Role</label>
+                <select id="editRole" class="form-control">
+                  <option value="resident">Resident</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Account Status</label>
+                <select id="editStatus" class="form-control">
+                  <option value="approved">Approved</option>
+                  <option value="pending">Pending</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>New Password (Leave blank to keep current password)</label>
+              <input type="password" id="editPassword" class="form-control" placeholder="Optional new password" />
+            </div>
+            <div style="display:flex; gap:10px; margin-top:8px;">
+              <button type="submit" class="btn btn-primary">Save Account Changes</button>
+              <button type="button" class="btn btn-outline" onclick="closeEditModal()">Cancel</button>
+            </div>
+          </form>
+        </div>
+      `;
+
+      document.getElementById('editAccountForm').addEventListener('submit', saveAccountEdit);
+      await loadAllAccounts();
+    })();
+
+    async function loadAllAccounts() {
+      const res = await fetch('/api/admin/all-accounts');
+      if (!res.ok) return;
+      ALL_ACCOUNTS = await res.json();
+      renderAccountsTable();
+    }
+
+    function statusBadge(st) {
+      if (st === 'approved') return '<span class="badge badge-success">Approved</span>';
+      if (st === 'pending') return '<span class="badge badge-warning">Pending</span>';
+      return '<span class="badge badge-danger">Rejected</span>';
+    }
+
+    function renderAccountsTable() {
+      const q = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
+      const filtered = ALL_ACCOUNTS.filter(acc => {
+        const full = `${acc.first_name} ${acc.second_name} ${acc.phone} ${acc.room || ''} ${acc.role} ${acc.status}`.toLowerCase();
+        return full.includes(q);
+      });
+
+      const tbody = document.getElementById('accountsTableBody');
+      if (!tbody) return;
+
+      if (!filtered.length) {
+        tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text-muted);">No matching accounts found.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = filtered.map(acc => `
+        <tr>
+          <td><img src="${acc.avatar}" alt="${acc.first_name}" class="user-avatar-sm" /></td>
+          <td><strong>${acc.first_name} ${acc.second_name}</strong></td>
+          <td>${acc.phone}</td>
+          <td><span class="badge badge-primary">${acc.room || 'ADMIN'}</span></td>
+          <td>${acc.role === 'admin' ? '<span class="badge badge-primary">Admin</span>' : 'Resident'}</td>
+          <td>${statusBadge(acc.status)}</td>
+          <td style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-outline" style="padding:6px 12px; font-size:12px;" onclick="openEditModal(${acc.id})">Edit</button>
+            ${acc.role !== 'admin' ? `<button class="btn btn-danger" style="padding:6px 12px; font-size:12px;" onclick="deleteAccount(${acc.id})">Delete</button>` : ''}
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    function openEditModal(id) {
+      const acc = ALL_ACCOUNTS.find(a => a.id === id);
+      if (!acc) return;
+
+      document.getElementById('modalError').style.display = 'none';
+      document.getElementById('editId').value = acc.id;
+      document.getElementById('editFirstName').value = acc.first_name;
+      document.getElementById('editSecondName').value = acc.second_name;
+      document.getElementById('editPhone').value = acc.phone;
+      document.getElementById('editRole').value = acc.role;
+      document.getElementById('editStatus').value = acc.status;
+      document.getElementById('editPassword').value = '';
+
+      const roomSelect = document.getElementById('editRoom');
+      const roomOptions = ['<option value="ADMIN">ADMIN</option>'].concat(
+        ALL_ROOMS.map(rm => {
+          const occupants = ALL_ACCOUNTS.filter(x => x.room === rm && x.role === 'resident' && x.status !== 'rejected' && x.id !== acc.id).length;
+          const isFull = occupants >= 2;
+          return `<option value="${rm}" ${acc.room === rm ? 'selected' : ''} ${isFull ? 'disabled' : ''}>${rm} (${occupants + (acc.room === rm ? 1 : 0)}/2)${isFull ? ' — Full' : ''}</option>`;
+        })
+      );
+      roomSelect.innerHTML = roomOptions.join('');
+
+      const card = document.getElementById('editModalCard');
+      card.style.display = 'block';
+      card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function closeEditModal() {
+      document.getElementById('editModalCard').style.display = 'none';
+    }
+
+    async function saveAccountEdit(e) {
+      e.preventDefault();
+      const id = document.getElementById('editId').value;
+      const payload = {
+        first_name: document.getElementById('editFirstName').value,
+        second_name: document.getElementById('editSecondName').value,
+        phone: document.getElementById('editPhone').value,
+        room: document.getElementById('editRoom').value,
+        role: document.getElementById('editRole').value,
+        status: document.getElementById('editStatus').value,
+        password: document.getElementById('editPassword').value
+      };
+
+      const res = await fetch(`/api/admin/accounts/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      const errBox = document.getElementById('modalError');
+
+      if (!res.ok) {
+        errBox.textContent = data.error || 'Could not update account.';
+        errBox.style.display = 'block';
+        return;
+      }
+
+      closeEditModal();
+      await loadAllAccounts();
+      const okBox = document.getElementById('resAlert');
+      okBox.textContent = 'Account updated successfully.';
+      okBox.style.display = 'block';
+    }
+
+    async function deleteAccount(id) {
+      const res = await fetch(`/api/admin/accounts/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Could not delete account.');
+        return;
+      }
+      await loadAllAccounts();
+      const okBox = document.getElementById('resAlert');
+      okBox.textContent = 'Account deleted.';
+      okBox.style.display = 'block';
+    }
+  </script>
+</body>
+</html>

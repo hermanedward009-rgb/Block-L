@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Block L — Sign In</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="auth-wrapper">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <div class="brand-badge">L</div>
+        <h1 style="font-size: 22px; font-weight: 800;">Block L</h1>
+      </div>
+
+      <div id="alertBox" class="alert"></div>
+
+      <!-- LOGIN FORM -->
+      <form id="loginForm">
+        <div class="form-group">
+          <label>Phone Number or Username</label>
+          <input type="text" id="loginIdentifier" class="form-control" required />
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="loginPassword" class="form-control" required />
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 6px;">Sign In</button>
+        <div style="display: flex; justify-content: space-between; margin-top: 16px; font-size: 13px;">
+          <a href="#" onclick="switchView('register')" style="color: var(--primary); font-weight: 600; text-decoration: none;">Create Account</a>
+          <a href="#" onclick="switchView('forgot')" style="color: var(--text-muted); text-decoration: none;">Forgot Password?</a>
+        </div>
+      </form>
+
+      <!-- REGISTER FORM -->
+      <form id="registerForm" style="display: none;" enctype="multipart/form-data">
+        <div class="form-group">
+          <label>First Name</label>
+          <input type="text" name="first_name" class="form-control" required />
+        </div>
+        <div class="form-group">
+          <label>Second Name</label>
+          <input type="text" name="second_name" class="form-control" required />
+        </div>
+        <div class="form-group">
+          <label>Phone Number (10 digits)</label>
+          <input type="text" name="phone" maxlength="10" pattern="\d{10}" class="form-control" required />
+        </div>
+        <div class="form-group">
+          <label>Room Number (Max 2 Members)</label>
+          <select name="room" id="roomSelect" class="form-control" required></select>
+        </div>
+        <div class="form-group">
+          <label>Profile Photo (Required)</label>
+          <input type="file" name="avatar" accept="image/*" class="form-control" required />
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" name="password" class="form-control" required />
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%;">Register</button>
+        <div style="text-align: center; margin-top: 14px; font-size: 13px;">
+          <a href="#" onclick="switchView('login')" style="color: var(--primary); font-weight: 600; text-decoration: none;">Back to Sign In</a>
+        </div>
+      </form>
+
+      <!-- FORGOT PASSWORD FORM -->
+      <form id="forgotForm" style="display: none;">
+        <div class="form-group">
+          <label>Registered Phone Number</label>
+          <input type="text" id="fpPhone" maxlength="10" class="form-control" required />
+        </div>
+        <div class="form-group">
+          <label>Assigned Room (e.g. R-01)</label>
+          <input type="text" id="fpRoom" class="form-control" required />
+        </div>
+        <div class="form-group">
+          <label>New Password</label>
+          <input type="password" id="fpPassword" class="form-control" required />
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%;">Reset Password</button>
+        <div style="text-align: center; margin-top: 14px; font-size: 13px;">
+          <a href="#" onclick="switchView('login')" style="color: var(--primary); font-weight: 600; text-decoration: none;">Back to Sign In</a>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    function showAlert(msg, type = 'error') {
+      const box = document.getElementById('alertBox');
+      box.className = `alert alert-${type}`;
+      box.textContent = msg;
+      box.style.display = 'block';
+    }
+
+    function switchView(view) {
+      document.getElementById('alertBox').style.display = 'none';
+      document.getElementById('loginForm').style.display = view === 'login' ? 'block' : 'none';
+      document.getElementById('registerForm').style.display = view === 'register' ? 'block' : 'none';
+      document.getElementById('forgotForm').style.display = view === 'forgot' ? 'block' : 'none';
+      if (view === 'register') loadRooms();
+    }
+
+    async function loadRooms() {
+      const res = await fetch('/api/rooms-availability');
+      const rooms = await res.json();
+      const select = document.getElementById('roomSelect');
+      select.innerHTML = rooms.map(r =>
+        `<option value="${r.room}" ${r.full ? 'disabled' : ''}>${r.room} (${r.count}/2)${r.full ? ' — FULL' : ''}</option>`
+      ).join('');
+    }
+
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier: document.getElementById('loginIdentifier').value,
+          password: document.getElementById('loginPassword').value
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) return showAlert(data.error, 'error');
+      window.location.href = '/dashboard.html';
+    });
+
+    document.getElementById('registerForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      const res = await fetch('/api/register', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (!res.ok) return showAlert(data.error, 'error');
+      e.target.reset();
+      switchView('login');
+      showAlert(data.message, 'success');
+    });
+
+    document.getElementById('forgotForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const res = await fetch('/api/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: document.getElementById('fpPhone').value,
+          room: document.getElementById('fpRoom').value,
+          new_password: document.getElementById('fpPassword').value
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) return showAlert(data.error, 'error');
+      switchView('login');
+      showAlert(data.message, 'success');
+    });
+  </script>
+</body>
+</html>
