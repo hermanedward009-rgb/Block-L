@@ -1,0 +1,5 @@
+﻿node_modules/
+block_l.db
+block_l.db-journal
+uploads/
+.env
