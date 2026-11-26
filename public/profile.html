@@ -36,7 +36,7 @@
             <div id="profileAlert" class="alert" style="display:none;"></div>
 
             <div style="display:flex; align-items:center; gap:16px; padding-bottom:18px; border-bottom:1px solid var(--border); margin-bottom:18px;">
-              <img id="avatarPreview" src="${assetUrl(user.avatar)}" alt="${user.first_name}" class="user-avatar-lg" />
+              <img id="avatarPreview" src="${imgSrcAttr(user.avatar)}" alt="${htmlAttr(user.first_name)}" class="user-avatar-lg" />
               <div>
                 <h4 style="font-size:17px;">${user.first_name} ${user.second_name}</h4>
                 <div style="margin-top:6px; display:flex; gap:8px; flex-wrap:wrap;">
@@ -105,9 +105,10 @@
         }
         if (data.avatar) {
           document.getElementById('avatarPreview').src = assetUrl(data.avatar);
+          if (CURRENT_USER) CURRENT_USER.avatar = data.avatar;
         }
         box.className = 'alert alert-success';
-        box.textContent = 'Profile updated successfully.';
+        box.textContent = 'Profile photo and details saved.';
         box.style.display = 'block';
       });
 

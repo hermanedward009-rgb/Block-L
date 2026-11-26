@@ -17,12 +17,28 @@ function apiUrl(path) {
   return `${API_BASE_URL}${normalizedPath}`;
 }
 
+const PLACEHOLDER_AVATAR =
+  'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjAiIGhlaWdodD0iMTIwIiB2aWV3Qm94PSIwIDAgMTIwIDEyMCI+PHJlY3Qgd2lkdGg9IjEyMCIgaGVpZ2h0PSIxMjAiIGZpbGw9IiNlMmU4ZjAiLz48Y2lyY2xlIGN4PSI2MCIgY3k9IjQ4IiByPSIyMCIgZmlsbD0iIzk0YTNiOCIvPjxwYXRoIGQ9Ik0yOCAxMDRjNi0yMiA1OC0yMiA2NCAwIiBmaWxsPSIjOTRhM2I4Ii8+PC9zdmc+';
+
 function assetUrl(url) {
-  if (!url) return '';
-  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
-    return url;
+  if (!url || String(url).trim() === '') return PLACEHOLDER_AVATAR;
+  const value = String(url).trim();
+  if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('data:')) {
+    return value;
   }
-  return apiUrl(url);
+  if (value.startsWith('/')) return apiUrl(value);
+  return apiUrl(`/${value}`);
+}
+
+function htmlAttr(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;');
+}
+
+function imgSrcAttr(url) {
+  return htmlAttr(assetUrl(url));
 }
 
 async function apiFetch(path, options = {}) {
@@ -91,7 +107,7 @@ async function initShell(activePage) {
             <div id="notifList">Loading...</div>
           </div>
           <a href="/profile.html" class="user-chip">
-            <img src="${assetUrl(CURRENT_USER.avatar)}" alt="${CURRENT_USER.first_name}" class="user-avatar-sm" />
+            <img src="${imgSrcAttr(CURRENT_USER.avatar)}" alt="${htmlAttr(CURRENT_USER.first_name)}" class="user-avatar-sm" />
             <span style="font-size: 13px; font-weight: 600;">${CURRENT_USER.first_name}</span>
           </a>
         </div>

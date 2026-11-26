@@ -13,6 +13,7 @@ const {
   schedulePersistDatabase,
   saveUpload
 } = require('./lib/persist');
+const { DEFAULT_ADMIN_AVATAR, PLACEHOLDER_AVATAR } = require('./lib/default-avatar');
 
 const app = express();
 const server = http.createServer(app);
@@ -26,27 +27,16 @@ const dataDir = onVercel
 const uploadDir = path.join(dataDir, 'uploads');
 const dbPath = path.join(dataDir, 'block_l.db');
 
-const useCloudUploads = blobEnabled();
-const diskStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, unique + path.extname(file.originalname));
-  }
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }
 });
-const upload = useCloudUploads
-  ? multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
-  : multer({ storage: diskStorage });
 
 async function resolveUploadUrl(req) {
   if (!req.file) return null;
-  if (useCloudUploads) {
-    req.file.filename =
-      req.file.filename ||
-      Date.now() + '-' + Math.round(Math.random() * 1e9) + path.extname(req.file.originalname || '');
-    return saveUpload(req.file);
-  }
-  return `/uploads/${req.file.filename}`;
+  const url = await saveUpload(req.file, uploadDir);
+  if (!url) throw new Error('Could not store uploaded file.');
+  return url;
 }
 
 let db;
@@ -89,13 +79,11 @@ app.use(
 
 function seedAdminIfNeeded() {
   const adminHash = bcrypt.hashSync('Admin@BlockL2026', 10);
-  const defaultAdminAvatar =
-    'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="%234f46e5"/><text x="50%" y="54%" font-size="44" font-family="Arial" fill="white" text-anchor="middle" dominant-baseline="middle">AD</text></svg>';
 
   db.run(
     `INSERT INTO users (first_name, second_name, username, phone, room, role, status, avatar, password_hash)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ['Block L', 'Administrator', 'admin_blockl', '0700000000', 'ADMIN', 'admin', 'approved', defaultAdminAvatar, adminHash]
+    ['Block L', 'Administrator', 'admin_blockl', '0700000000', 'ADMIN', 'admin', 'approved', DEFAULT_ADMIN_AVATAR, adminHash]
   );
 
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -179,6 +167,15 @@ function openDatabase() {
     is_read INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
+
+        // Fix avatars that break in HTML (raw SVG data URLs) and empty values
+        db.run(`UPDATE users SET avatar = ? WHERE avatar IS NULL OR avatar = ''`, [PLACEHOLDER_AVATAR]);
+        db.run(`UPDATE users SET avatar = ? WHERE avatar LIKE 'data:image/svg+xml;utf8,%'`, [
+          DEFAULT_ADMIN_AVATAR
+        ]);
+        db.run(`UPDATE users SET avatar = ? WHERE role = 'admin' AND avatar LIKE '%AD</text>%'`, [
+          DEFAULT_ADMIN_AVATAR
+        ]);
 
         // Remove built-in demo residents (e.g. Juma Mushi) from older databases
         db.run(
@@ -310,6 +307,9 @@ app.post('/api/register', upload.single('avatar'), async (req, res) => {
 
         const hash = bcrypt.hashSync(password, 10);
         const avatarUrl = await resolveUploadUrl(req);
+        if (!avatarUrl) {
+          return res.status(500).json({ error: 'Could not save profile photo. Try again.' });
+        }
 
         db.run(
           `INSERT INTO users (first_name, second_name, username, phone, room, role, status, avatar, password_hash)
@@ -396,6 +396,9 @@ app.post('/api/profile/update', requireAuth, upload.single('avatar'), async (req
 
   if (req.file) {
     const avatarUrl = await resolveUploadUrl(req);
+    if (!avatarUrl) {
+      return res.status(500).json({ error: 'Could not save profile photo. Try again.' });
+    }
     db.run(
       `UPDATE users SET first_name = ?, second_name = ?, phone = ?, avatar = ? WHERE id = ?`,
       [first_name.trim(), second_name.trim(), phone.trim(), avatarUrl, req.session.userId],
