@@ -7,27 +7,65 @@ const cookieSession = require('cookie-session');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const {
+  blobEnabled,
+  restoreDatabase,
+  schedulePersistDatabase,
+  saveUpload
+} = require('./lib/persist');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 const PORT = process.env.PORT || 3000;
 const onVercel = process.env.VERCEL === '1';
-const dataDir = onVercel ? '/tmp' : __dirname;
+const dataDir = onVercel
+  ? path.join('/tmp', 'block-l-data')
+  : path.resolve(process.env.DATA_DIR || __dirname);
 
-// Ensure uploads directory exists
 const uploadDir = path.join(dataDir, 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+const dbPath = path.join(dataDir, 'block_l.db');
 
-// Multer config for profile images, payment screenshots & chat media
-const storage = multer.diskStorage({
+const useCloudUploads = blobEnabled();
+const diskStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
     const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
     cb(null, unique + path.extname(file.originalname));
   }
 });
-const upload = multer({ storage });
+const upload = useCloudUploads
+  ? multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
+  : multer({ storage: diskStorage });
+
+async function resolveUploadUrl(req) {
+  if (!req.file) return null;
+  if (useCloudUploads) {
+    req.file.filename =
+      req.file.filename ||
+      Date.now() + '-' + Math.round(Math.random() * 1e9) + path.extname(req.file.originalname || '');
+    return saveUpload(req.file);
+  }
+  return `/uploads/${req.file.filename}`;
+}
+
+let db;
+
+function attachPersistHook(database) {
+  const originalRun = database.run.bind(database);
+  database.run = function runWithPersist(sql, ...params) {
+    const last = params[params.length - 1];
+    if (typeof last === 'function') {
+      params[params.length - 1] = function onComplete(...args) {
+        schedulePersistDatabase(dbPath);
+        last.apply(this, args);
+      };
+    } else {
+      schedulePersistDatabase(dbPath);
+    }
+    return originalRun(sql, ...params);
+  };
+}
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -49,15 +87,38 @@ app.use(
   })
 );
 
-// Initialize SQLite Database. Vercel’s filesystem is read-only except /tmp.
-const dbPath = path.join(dataDir, 'block_l.db');
-if (onVercel && !fs.existsSync(dbPath)) {
-  const bundledDb = path.join(__dirname, 'block_l.db');
-  if (fs.existsSync(bundledDb)) fs.copyFileSync(bundledDb, dbPath);
-}
-const db = new sqlite3.Database(dbPath);
+function seedAdminIfNeeded() {
+  const adminHash = bcrypt.hashSync('Admin@BlockL2026', 10);
+  const defaultAdminAvatar =
+    'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="%234f46e5"/><text x="50%" y="54%" font-size="44" font-family="Arial" fill="white" text-anchor="middle" dominant-baseline="middle">AD</text></svg>';
 
-db.serialize(() => {
+  db.run(
+    `INSERT INTO users (first_name, second_name, username, phone, room, role, status, avatar, password_hash)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ['Block L', 'Administrator', 'admin_blockl', '0700000000', 'ADMIN', 'admin', 'approved', defaultAdminAvatar, adminHash]
+  );
+
+  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  const toilets = ['Large Toilet', 'Small Toilet'];
+  days.forEach((day) => {
+    toilets.forEach((toilet) => {
+      db.run(`INSERT INTO toilet_schedule (day_name, toilet_type, assigned_user_id) VALUES (?, ?, ?)`, [
+        day,
+        toilet,
+        null
+      ]);
+    });
+  });
+
+  db.run(`INSERT INTO notifications (user_id, message) VALUES (NULL, 'Welcome to Block L Management System.')`);
+}
+
+function openDatabase() {
+  return new Promise((resolve, reject) => {
+    db = new sqlite3.Database(dbPath, (err) => {
+      if (err) return reject(err);
+      attachPersistHook(db);
+      db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     first_name TEXT NOT NULL,
@@ -119,41 +180,56 @@ db.serialize(() => {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
-  // Seed ONLY the 2 required accounts if database is empty
-  db.get(`SELECT COUNT(*) AS count FROM users`, (err, row) => {
-    if (row && row.count === 0) {
-      const adminHash = bcrypt.hashSync('Admin@BlockL2026', 10);
-      const residentHash = bcrypt.hashSync('Resident@123', 10);
+        // Remove built-in demo residents (e.g. Juma Mushi) from older databases
+        db.run(
+          `DELETE FROM users WHERE role = 'resident' AND (
+            phone = '0712345678' OR (first_name = 'Juma' AND second_name = 'Mushi')
+          )`
+        );
+        db.run(
+          `UPDATE toilet_schedule SET assigned_user_id = NULL
+           WHERE assigned_user_id IS NOT NULL
+             AND assigned_user_id NOT IN (SELECT id FROM users)`
+        );
+        db.run(`DELETE FROM messages WHERE sender_id NOT IN (SELECT id FROM users)`);
 
-      // Default SVG data URLs so accounts work immediately without external files
-      const defaultAdminAvatar = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="%234f46e5"/><text x="50%" y="54%" font-size="44" font-family="Arial" fill="white" text-anchor="middle" dominant-baseline="middle">AD</text></svg>';
-      const defaultResAvatar = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="%230ea5e9"/><text x="50%" y="54%" font-size="44" font-family="Arial" fill="white" text-anchor="middle" dominant-baseline="middle">JM</text></svg>';
-
-      db.run(
-        `INSERT INTO users (first_name, second_name, username, phone, room, role, status, avatar, password_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ['Block L', 'Administrator', 'admin_blockl', '0700000000', 'ADMIN', 'admin', 'approved', defaultAdminAvatar, adminHash]
-      );
-
-      db.run(
-        `INSERT INTO users (first_name, second_name, username, phone, room, role, status, avatar, password_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ['Juma', 'Mushi', '0712345678', '0712345678', 'R-01', 'resident', 'approved', defaultResAvatar, residentHash]
-      );
-
-      // Seed permanent weekly schedule slots
-      const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-      const toilets = ['Large Toilet', 'Small Toilet'];
-      days.forEach((day, idx) => {
-        toilets.forEach((toilet) => {
-          const assigned = (idx === 0 && toilet === 'Large Toilet') ? 2 : null;
-          db.run(`INSERT INTO toilet_schedule (day_name, toilet_type, assigned_user_id) VALUES (?, ?, ?)`, [day, toilet, assigned]);
+        db.get(`SELECT COUNT(*) AS count FROM users`, (countErr, row) => {
+          if (countErr) return reject(countErr);
+          if (row && row.count === 0) seedAdminIfNeeded();
+          resolve();
         });
       });
-
-      db.run(`INSERT INTO notifications (user_id, message) VALUES (NULL, 'Welcome to Block L Management System.')`);
-    }
+    });
   });
+}
+
+const dbBoot = (async () => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(uploadDir, { recursive: true });
+
+  if (blobEnabled()) {
+    const restored = await restoreDatabase(dbPath);
+    if (!restored) {
+      const bundledDb = path.join(__dirname, 'block_l.db');
+      if (fs.existsSync(bundledDb) && !fs.existsSync(dbPath)) {
+        fs.copyFileSync(bundledDb, dbPath);
+      }
+    }
+  } else if (!fs.existsSync(dbPath)) {
+    const bundledDb = path.join(__dirname, 'block_l.db');
+    if (fs.existsSync(bundledDb)) fs.copyFileSync(bundledDb, dbPath);
+  }
+
+  await openDatabase();
+})();
+
+app.use((req, res, next) => {
+  dbBoot
+    .then(() => next())
+    .catch((err) => {
+      console.error('Database boot failed:', err);
+      res.status(503).json({ error: 'System starting up. Please try again shortly.' });
+    });
 });
 
 // Socket.io Real-Time Connection
@@ -205,54 +281,61 @@ app.post('/api/login', (req, res) => {
 });
 
 // Register (Enforces 10-digit phone, mandatory image, max 2 members per room R-01..R-10)
-app.post('/api/register', upload.single('avatar'), (req, res) => {
-  const { first_name, second_name, phone, room, password } = req.body;
-  const validRooms = ['R-01','R-02','R-03','R-04','R-05','R-06','R-07','R-08','R-09','R-10'];
+app.post('/api/register', upload.single('avatar'), async (req, res) => {
+  try {
+    const { first_name, second_name, phone, room, password } = req.body;
+    const validRooms = ['R-01','R-02','R-03','R-04','R-05','R-06','R-07','R-08','R-09','R-10'];
 
-  if (!first_name || !second_name || !phone || !room || !password) {
-    return res.status(400).json({ error: 'All fields are required.' });
-  }
-  if (!/^\d{10}$/.test(phone)) {
-    return res.status(400).json({ error: 'Phone number must be exactly 10 digits.' });
-  }
-  if (!validRooms.includes(room)) {
-    return res.status(400).json({ error: 'Invalid room selection.' });
-  }
-  if (!req.file) {
-    return res.status(400).json({ error: 'Profile image is mandatory.' });
-  }
-
-  // Check room occupancy (approved + pending cannot exceed 2)
-  db.get(
-    `SELECT COUNT(*) AS count FROM users WHERE room = ? AND role = 'resident' AND status IN ('approved', 'pending')`,
-    [room],
-    (err, row) => {
-      if (row && row.count >= 2) {
-        fs.unlinkSync(req.file.path);
-        return res.status(400).json({ error: `Room ${room} is already full (Max 2 members).` });
-      }
-
-      const hash = bcrypt.hashSync(password, 10);
-      const avatarUrl = `/uploads/${req.file.filename}`;
-
-      db.run(
-        `INSERT INTO users (first_name, second_name, username, phone, room, role, status, avatar, password_hash)
-         VALUES (?, ?, ?, ?, ?, 'resident', 'pending', ?, ?)`,
-        [first_name.trim(), second_name.trim(), phone.trim(), phone.trim(), room, avatarUrl, hash],
-        function (insertErr) {
-          if (insertErr) {
-            fs.unlinkSync(req.file.path);
-            return res.status(400).json({ error: 'Phone number is already registered.' });
-          }
-          db.run(`INSERT INTO notifications (user_id, message) VALUES (1, ?)`, [
-            `New registration from ${first_name} ${second_name} (${room}) awaits approval.`
-          ]);
-          io.to('block_l').emit('notification:new');
-          res.json({ success: true, message: 'Registration submitted. Wait for Admin approval.' });
-        }
-      );
+    if (!first_name || !second_name || !phone || !room || !password) {
+      return res.status(400).json({ error: 'All fields are required.' });
     }
-  );
+    if (!/^\d{10}$/.test(phone)) {
+      return res.status(400).json({ error: 'Phone number must be exactly 10 digits.' });
+    }
+    if (!validRooms.includes(room)) {
+      return res.status(400).json({ error: 'Invalid room selection.' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'Profile image is mandatory.' });
+    }
+
+    db.get(
+      `SELECT COUNT(*) AS count FROM users WHERE room = ? AND role = 'resident' AND status IN ('approved', 'pending')`,
+      [room],
+      async (err, row) => {
+        if (row && row.count >= 2) {
+          if (req.file.path) fs.unlinkSync(req.file.path);
+          return res.status(400).json({ error: `Room ${room} is already full (Max 2 members).` });
+        }
+
+        const hash = bcrypt.hashSync(password, 10);
+        const avatarUrl = await resolveUploadUrl(req);
+
+        db.run(
+          `INSERT INTO users (first_name, second_name, username, phone, room, role, status, avatar, password_hash)
+           VALUES (?, ?, ?, ?, ?, 'resident', 'pending', ?, ?)`,
+          [first_name.trim(), second_name.trim(), phone.trim(), phone.trim(), room, avatarUrl, hash],
+          function (insertErr) {
+            if (insertErr) {
+              if (req.file.path) fs.unlinkSync(req.file.path);
+              return res.status(400).json({ error: 'Phone number is already registered.' });
+            }
+            db.run(`INSERT INTO notifications (user_id, message) VALUES (1, ?)`, [
+              `New registration from ${first_name} ${second_name} (${room}) awaits Admin approval.`
+            ]);
+            io.to('block_l').emit('notification:new');
+            res.json({
+              success: true,
+              message: 'Registration submitted. You cannot sign in until the Administrator approves your account.'
+            });
+          }
+        );
+      }
+    );
+  } catch (bootErr) {
+    console.error(bootErr);
+    res.status(500).json({ error: 'Could not complete registration.' });
+  }
 });
 
 // Forgot Password
@@ -263,6 +346,9 @@ app.post('/api/forgot-password', (req, res) => {
   }
   db.get(`SELECT * FROM users WHERE phone = ? AND room = ?`, [phone.trim(), room.trim()], (err, user) => {
     if (!user) return res.status(404).json({ error: 'No matching account found.' });
+    if (user.status !== 'approved') {
+      return res.status(403).json({ error: 'Account is not approved yet. Contact the Administrator.' });
+    }
     const hash = bcrypt.hashSync(new_password, 10);
     db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [hash, user.id], () => {
       res.json({ success: true, message: 'Password updated. You can now sign in.' });
@@ -301,14 +387,15 @@ app.get('/api/me', requireAuth, (req, res) => {
 });
 
 // Update profile details & profile picture
-app.post('/api/profile/update', requireAuth, upload.single('avatar'), (req, res) => {
+app.post('/api/profile/update', requireAuth, upload.single('avatar'), async (req, res) => {
+  try {
   const { first_name, second_name, phone } = req.body;
   if (!/^\d{10}$/.test(phone)) {
     return res.status(400).json({ error: 'Phone number must be 10 digits.' });
   }
 
   if (req.file) {
-    const avatarUrl = `/uploads/${req.file.filename}`;
+    const avatarUrl = await resolveUploadUrl(req);
     db.run(
       `UPDATE users SET first_name = ?, second_name = ?, phone = ?, avatar = ? WHERE id = ?`,
       [first_name.trim(), second_name.trim(), phone.trim(), avatarUrl, req.session.userId],
@@ -326,6 +413,9 @@ app.post('/api/profile/update', requireAuth, upload.single('avatar'), (req, res)
         res.json({ success: true });
       }
     );
+  }
+  } catch (err) {
+    res.status(500).json({ error: 'Profile update failed.' });
   }
 });
 
@@ -492,19 +582,20 @@ app.get('/api/messages', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/messages', requireAuth, upload.single('media'), (req, res) => {
+app.post('/api/messages', requireAuth, upload.single('media'), async (req, res) => {
+  try {
   const { receiver_id, content } = req.body;
   const cleanText = (content || '').trim();
-  const mediaUrl = req.file ? `/uploads/${req.file.filename}` : null;
+  const attachedMediaUrl = req.file ? await resolveUploadUrl(req) : null;
 
-  if (!cleanText && !mediaUrl) {
+  if (!cleanText && !attachedMediaUrl) {
     return res.status(400).json({ error: 'Message text or media file required.' });
   }
 
   const target = !receiver_id || receiver_id === 'group' ? null : Number(receiver_id);
   db.run(
     `INSERT INTO messages (sender_id, receiver_id, content, media_url) VALUES (?, ?, ?, ?)`,
-    [req.session.userId, target, cleanText, mediaUrl],
+    [req.session.userId, target, cleanText, attachedMediaUrl],
     function () {
       db.get(
         `SELECT m.*, u.first_name, u.second_name, u.room, u.role, u.avatar
@@ -517,6 +608,16 @@ app.post('/api/messages', requireAuth, upload.single('media'), (req, res) => {
       );
     }
   );
+  } catch (err) {
+    res.status(500).json({ error: 'Message send failed.' });
+  }
+});
+
+app.delete('/api/admin/messages/:id', requireAdmin, (req, res) => {
+  db.run(`DELETE FROM messages WHERE id = ?`, [req.params.id], function () {
+    if (this.changes === 0) return res.status(404).json({ error: 'Message not found.' });
+    res.json({ success: true });
+  });
 });
 
 // --- TOILET SCHEDULE ROUTES ---
@@ -564,15 +665,17 @@ app.get('/api/electricity', requireAuth, (req, res) => {
   });
 });
 
-app.post('/api/electricity', requireAuth, upload.single('screenshot'), (req, res) => {
+app.post('/api/electricity', requireAuth, upload.single('screenshot'), async (req, res) => {
+  try {
   const { payer_name, amount, room, token } = req.body;
   if (!payer_name || !amount || !room || !token || !req.file) {
     return res.status(400).json({ error: 'All fields and transaction screenshot are required.' });
   }
 
+  const screenshotUrl = await resolveUploadUrl(req);
+
   db.get(`SELECT MAX(round_number) AS r FROM electricity_bills`, [], (err, row) => {
     const round = (row && row.r) || 1;
-    const screenshotUrl = `/uploads/${req.file.filename}`;
 
     db.run(
       `INSERT INTO electricity_bills (room, payer_name, amount, token, screenshot, status, round_number)
@@ -586,6 +689,32 @@ app.post('/api/electricity', requireAuth, upload.single('screenshot'), (req, res
         res.json({ success: true });
       }
     );
+  });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not submit electricity payment.' });
+  }
+});
+
+app.put('/api/admin/electricity/:id', requireAdmin, (req, res) => {
+  const { payer_name, amount, room, token, status } = req.body;
+  if (!payer_name || !amount || !room || !token || !status) {
+    return res.status(400).json({ error: 'All bill fields are required.' });
+  }
+  db.run(
+    `UPDATE electricity_bills SET payer_name = ?, amount = ?, room = ?, token = ?, status = ? WHERE id = ?`,
+    [payer_name.trim(), amount, room.trim(), token.trim(), status, req.params.id],
+    function (err) {
+      if (err || this.changes === 0) return res.status(400).json({ error: 'Could not update bill record.' });
+      io.to('block_l').emit('notification:new');
+      res.json({ success: true });
+    }
+  );
+});
+
+app.delete('/api/admin/electricity/:id', requireAdmin, (req, res) => {
+  db.run(`DELETE FROM electricity_bills WHERE id = ? AND room != 'SYSTEM'`, [req.params.id], function () {
+    if (this.changes === 0) return res.status(404).json({ error: 'Bill not found or protected.' });
+    res.json({ success: true });
   });
 });
 
@@ -663,6 +792,28 @@ app.post('/api/posts', requireAuth, (req, res) => {
       res.json({ success: true });
     }
   );
+});
+
+app.put('/api/admin/posts/:id', requireAdmin, (req, res) => {
+  const { title, body, type } = req.body;
+  if (!title || !body || !type) {
+    return res.status(400).json({ error: 'Title, message, and type are required.' });
+  }
+  db.run(
+    `UPDATE posts SET title = ?, body = ?, type = ? WHERE id = ?`,
+    [title.trim(), body.trim(), type, req.params.id],
+    function (err) {
+      if (err || this.changes === 0) return res.status(400).json({ error: 'Could not update post.' });
+      res.json({ success: true });
+    }
+  );
+});
+
+app.delete('/api/admin/posts/:id', requireAdmin, (req, res) => {
+  db.run(`DELETE FROM posts WHERE id = ?`, [req.params.id], function () {
+    if (this.changes === 0) return res.status(404).json({ error: 'Post not found.' });
+    res.json({ success: true });
+  });
 });
 
 // --- NOTIFICATIONS ---

@@ -157,6 +157,7 @@
         </div>
         ${msg.content ? `<div style="font-size:14px; white-space:pre-line;">${msg.content}</div>` : ''}
         ${renderMediaAttachment(msg.media_url)}
+        ${CURRENT_USER?.role === 'admin' ? `<button type="button" class="btn btn-danger" style="margin-top:8px; padding:4px 8px; font-size:11px;" onclick="deleteChatMessage(${msg.id})">Delete (Admin)</button>` : ''}
       `;
       box.appendChild(div);
       box.scrollTop = box.scrollHeight;
@@ -200,6 +201,13 @@
         fileInput.value = '';
         updateAttachLabel(fileInput);
       }
+    }
+
+    async function deleteChatMessage(id) {
+      if (!confirm('Delete this message?')) return;
+      const res = await apiFetch(`/api/admin/messages/${id}`, { method: 'DELETE' });
+      if (!res.ok) return alert('Delete failed.');
+      await loadMessages();
     }
 
     function bindChatSocketEvents() {

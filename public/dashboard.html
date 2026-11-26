@@ -7,194 +7,6 @@
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body>
-  <script src="/socket.io/socket.io.js"></script>
-  <script src="/js/app.js"></script>
-  <script>
-    const ALL_ROOMS = ['R-01','R-02','R-03','R-04','R-05','R-06','R-07','R-08','R-09','R-10'];
-
-    (async () => {
-      const user = await initShell('dashboard');
-      if (!user) return;
-      document.getElementById('pageTitle').textContent = 'Dashboard Overview';
-
-      const [membersRes, elecRes, pendingRes] = await Promise.all([
-        fetch('/api/members'),
-        fetch('/api/electricity'),
-        user.role === 'admin' ? fetch('/api/admin/pending-users') : Promise.resolve(null)
-      ]);
-
-      const members = await membersRes.json();
-      const elec = await elecRes.json();
-      const pendingUsers = pendingRes ? await pendingRes.json() : [];
-      const residentsOnly = members.filter(m => m.role === 'resident');
-
-      const container = document.getElementById('pageContent');
-      container.innerHTML = `
-        <div id="dashAlert" class="alert alert-error" style="display:none;"></div>
-        ${elec.reminderActive ? `<div class="alert alert-warning">⚡ Reminder: Only <strong>${elec.remainingCount} rooms</strong> remain to complete Electricity Round #${elec.currentRound}.</div>` : ''}
-
-        <div class="grid-cards">
-          <div class="card">
-            <div style="font-size: 13px; color: var(--text-muted);">Total Rooms</div>
-            <div style="font-size: 28px; font-weight: 800; margin-top: 6px;">10 Rooms</div>
-            <div style="font-size: 12px; color: var(--primary); margin-top: 4px;">R-01 to R-10 (Max 20 Capacity)</div>
-          </div>
-          <div class="card">
-            <div style="font-size: 13px; color: var(--text-muted);">Active Members</div>
-            <div style="font-size: 28px; font-weight: 800; margin-top: 6px;">${members.length}</div>
-            <div style="font-size: 12px; color: var(--success); margin-top: 4px;">Approved Accounts</div>
-          </div>
-          <div class="card">
-            <div style="font-size: 13px; color: var(--text-muted);">Electricity Round #${elec.currentRound}</div>
-            <div style="font-size: 28px; font-weight: 800; margin-top: 6px;">${elec.paidRooms.length} / 10 Paid</div>
-            <div style="font-size: 12px; color: var(--warning); margin-top: 4px;">${elec.remainingCount} Rooms Remaining</div>
-          </div>
-          <div class="card">
-            <div style="font-size: 13px; color: var(--text-muted);">Sanitation Facilities</div>
-            <div style="font-size: 28px; font-weight: 800; margin-top: 6px;">2 Toilets</div>
-            <div style="font-size: 12px; color: var(--accent); margin-top: 4px;">Large & Small Toilet</div>
-          </div>
-        </div>
-
-        ${user.role === 'admin' ? `
-          <div class="card" style="margin-bottom: 24px;">
-            <h3 style="margin-bottom: 14px;">Pending Resident Approvals (${pendingUsers.length})</h3>
-            ${pendingUsers.length === 0 ? '<p style="color: var(--text-muted); font-size: 14px;">No pending registrations.</p>' : `
-              <div class="table-wrap">
-                <table>
-                  <thead><tr><th>Photo</th><th>Full Name</th><th>Phone</th><th>Room</th><th>Action</th></tr></thead>
-                  <tbody>
-                    ${pendingUsers.map(u => `
-                      <tr>
-                        <td><img src="${u.avatar}" style="width:38px;height:38px;border-radius:50%;object-fit:cover;" /></td>
-                        <td>${u.first_name} ${u.second_name}</td>
-                        <td>${u.phone}</td>
-                        <td><span class="badge badge-primary">${u.room}</span></td>
-                        <td style="display:flex;gap:8px;">
-                          <button class="btn btn-primary" onclick="handleApproval(${u.id}, 'approve')">Approve</button>
-                          <button class="btn btn-danger" onclick="handleApproval(${u.id}, 'reject')">Reject</button>
-                        </td>
-                      </tr>
-                    `).join('')}
-                  </tbody>
-                </table>
-              </div>
-            `}
-          </div>
-
-          <div class="card" style="margin-bottom: 24px;">
-            <h3 style="margin-bottom: 14px;">Admin Controls: Residents & Room Assignments</h3>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Resident</th>
-                    <th>Phone</th>
-                    <th>Current Room</th>
-                    <th>Reassign Room</th>
-                    <th>Remove</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${residentsOnly.map(r => {
-                    const options = ALL_ROOMS.map(rm => {
-                      const count = residentsOnly.filter(x => x.room === rm && x.id !== r.id).length;
-                      const isFull = count >= 2;
-                      return `<option value="${rm}" ${r.room === rm ? 'selected' : ''} ${isFull ? 'disabled' : ''}>${rm} (${count + (r.room === rm ? 1 : 0)}/2)${isFull ? ' — Full' : ''}</option>`;
-                    }).join('');
-                    return `
-                      <tr>
-                        <td>
-                          <div style="display:flex;align-items:center;gap:10px;">
-                            <img src="${r.avatar}" class="user-avatar-sm" />
-                            <span>${r.first_name} ${r.second_name}</span>
-                          </div>
-                        </td>
-                        <td>${r.phone}</td>
-                        <td><span class="badge badge-primary">${r.room}</span></td>
-                        <td>
-                          <select class="form-control" style="max-width:170px;" onchange="reassignRoom(${r.id}, this.value)">
-                            ${options}
-                          </select>
-                        </td>
-                        <td>
-                          <button class="btn btn-danger" style="padding:7px 12px;font-size:12px;" onclick="removeResident(${r.id})">Remove</button>
-                        </td>
-                      </tr>
-                    `;
-                  }).join('')}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ` : ''}
-
-        <div class="card">
-          <h3 style="margin-bottom: 14px;">Room Occupancy Status (R-01 to R-10)</h3>
-          <div class="rooms-grid-10">
-            ${ALL_ROOMS.map(rm => {
-              const occupants = residentsOnly.filter(m => m.room === rm);
-              return `
-                <div style="border: 1px solid var(--border); border-radius: 12px; padding: 14px; background: var(--bg-subtle);">
-                  <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <strong>${rm}</strong>
-                    <span class="badge ${occupants.length >= 2 ? 'badge-danger' : 'badge-success'}">${occupants.length}/2</span>
-                  </div>
-                  <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">
-                    ${occupants.length ? occupants.map(o => `${o.first_name} ${o.second_name}`).join('<br>') : 'Available'}
-                  </div>
-                </div>
-              `;
-            }).join('')}
-          </div>
-        </div>
-      `;
-    })();
-
-    function showDashError(msg) {
-      const el = document.getElementById('dashAlert');
-      if (!el) return;
-      el.textContent = msg;
-      el.style.display = 'block';
-    }
-
-    async function handleApproval(id, action) {
-      await fetch(`/api/admin/approve-user/${id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action })
-      });
-      location.reload();
-    }
-
-    async function reassignRoom(userId, room) {
-      const res = await fetch(`/api/admin/residents/${userId}/room`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ room })
-      });
-      const data = await res.json();
-      if (!res.ok) return showDashError(data.error || 'Could not reassign room.');
-      location.reload();
-    }
-
-    async function removeResident(userId) {
-      const res = await fetch(`/api/admin/residents/${userId}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok) return showDashError(data.error || 'Could not remove resident.');
-      location.reload();
-    }
-  </script>
-</body>
-</html><!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Block L — Dashboard</title>
-  <link rel="stylesheet" href="/css/style.css" />
-</head>
-<body>
   <script src="/js/app.js"></script>
   <script>
     const ROOMS = ['R-01','R-02','R-03','R-04','R-05','R-06','R-07','R-08','R-09','R-10'];
@@ -257,7 +69,7 @@
           <div class="card">
             <div style="font-size:12px; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Latest Notice</div>
             <div style="font-size:14px; font-weight:600; margin-top:8px;">
-              ${latestAnnouncement ? latestAnnouncement.title : 'No announcements posted yet'}
+              ${latestAnnouncement ? latestAnnouncement.title : 'No announcements yet'}
             </div>
           </div>
         </div>
@@ -289,6 +101,7 @@
         ${user.role === 'admin' ? `
           <div class="card">
             <h3 style="font-size:16px; margin-bottom:12px;">Pending Account Approvals</h3>
+            <p style="font-size:13px; color:var(--text-muted); margin-bottom:10px;">New registrations cannot sign in until you approve them below.</p>
             <div id="pendingList">Loading pending registrations...</div>
           </div>
         ` : ''}

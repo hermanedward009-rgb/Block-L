@@ -161,10 +161,12 @@
           <td>${b.screenshot ? `<a href="${assetUrl(b.screenshot)}" target="_blank" rel="noopener noreferrer" style="color:var(--primary); font-weight:600;">View</a>` : '—'}</td>
           <td><span class="badge ${b.status === 'approved' ? 'badge-success' : 'badge-warning'}">${b.status}</span></td>
           ${CURRENT_USER.role === 'admin' ? `
-            <td>
+            <td style="display:flex; flex-wrap:wrap; gap:6px;">
               ${b.status !== 'approved'
                 ? `<button class="btn btn-primary" style="padding:5px 10px; font-size:12px;" onclick="approveBill(${b.id})">Approve</button>`
-                : '—'}
+                : ''}
+              <button class="btn btn-outline" style="padding:5px 10px; font-size:12px;" onclick="editBill(${b.id})">Edit</button>
+              <button class="btn btn-danger" style="padding:5px 10px; font-size:12px;" onclick="deleteBill(${b.id})">Delete</button>
             </td>
           ` : ''}
         </tr>
@@ -178,6 +180,33 @@
 
     async function startNextRound() {
       await apiFetch('/api/electricity/next-round', { method: 'POST' });
+      await loadElectricity();
+    }
+
+    async function editBill(id) {
+      const payer_name = prompt('Payer name:');
+      if (payer_name === null) return;
+      const amount = prompt('Amount:');
+      if (amount === null) return;
+      const room = prompt('Room (e.g. R-01):');
+      if (room === null) return;
+      const token = prompt('Token:');
+      if (token === null) return;
+      const status = prompt('Status (pending or approved):', 'pending');
+      if (status === null) return;
+      const res = await apiFetch(`/api/admin/electricity/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payer_name, amount, room, token, status })
+      });
+      if (!res.ok) return alert('Update failed.');
+      await loadElectricity();
+    }
+
+    async function deleteBill(id) {
+      if (!confirm('Delete this electricity record?')) return;
+      const res = await apiFetch(`/api/admin/electricity/${id}`, { method: 'DELETE' });
+      if (!res.ok) return alert('Delete failed.');
       await loadElectricity();
     }
   </script>
