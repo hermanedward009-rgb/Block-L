@@ -1,11 +1,15 @@
-const RENDER_BACKEND_URL = 'https://YOUR-RENDER-SERVICE.onrender.com';
-
 const API_BASE_URL = (() => {
   const host = window.location.hostname;
-  if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.onrender.com')) {
-    return '';
-  }
-  return RENDER_BACKEND_URL.replace(/\/+$/, '');
+  const sameOriginHost =
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host.endsWith('.vercel.app') ||
+    host.endsWith('.onrender.com');
+
+  if (sameOriginHost) return '';
+
+  const configured = (window.BLOCK_L_API_URL || '').trim();
+  return configured.replace(/\/+$/, '');
 })();
 
 function apiUrl(path) {

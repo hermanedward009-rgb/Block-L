@@ -3,7 +3,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
-const session = require('express-session');
+const cookieSession = require('cookie-session');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -35,17 +35,19 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(uploadDir));
 
 app.set('trust proxy', 1);
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'block_l_super_secret_key_2026',
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
+
+// Signed cookie sessions so auth survives Vercel’s serverless routing (memory sessions do not).
+const sessionSecret = process.env.SESSION_SECRET || 'block_l_super_secret_key_2026';
+app.use(
+  cookieSession({
+    name: 'block_l_sess',
+    keys: [sessionSecret],
+    maxAge: 24 * 60 * 60 * 1000,
     httpOnly: true,
-    secure: onVercel,
-    sameSite: 'lax',
-    maxAge: 24 * 60 * 60 * 1000
-  }
-}));
+    secure: onVercel || process.env.NODE_ENV === 'production',
+    sameSite: 'lax'
+  })
+);
 
 // Initialize SQLite Database. Vercel’s filesystem is read-only except /tmp.
 const dbPath = path.join(dataDir, 'block_l.db');
@@ -163,12 +165,12 @@ io.on('connection', (socket) => {
 
 // Middleware
 function requireAuth(req, res, next) {
-  if (!req.session.userId) return res.status(401).json({ error: 'Unauthorized' });
+  if (!req.session?.userId) return res.status(401).json({ error: 'Unauthorized' });
   next();
 }
 
 function requireAdmin(req, res, next) {
-  if (!req.session.userId || req.session.role !== 'admin') {
+  if (!req.session?.userId || req.session.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
   }
   next();
@@ -270,9 +272,8 @@ app.post('/api/forgot-password', (req, res) => {
 
 // Logout
 app.post('/api/logout', (req, res) => {
-  req.session.destroy(() => {
-    res.json({ success: true });
-  });
+  req.session = null;
+  res.json({ success: true });
 });
 
 // Room availability endpoint for registration dropdown
