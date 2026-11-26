@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: block-l
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeployTrigger: commit

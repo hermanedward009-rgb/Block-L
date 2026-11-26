@@ -159,7 +159,7 @@ function initSocket() {
   const socketTarget = API_BASE_URL || window.location.origin;
   SOCKET_CLIENT = io(socketTarget, {
     withCredentials: true,
-    transports: ['websocket', 'polling']
+    transports: window.location.hostname === 'localhost' ? ['websocket', 'polling'] : ['websocket']
   });
 
   const dot = document.getElementById('wsDot');

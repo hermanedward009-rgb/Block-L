@@ -11,11 +11,13 @@ const fs = require('fs');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
+const onVercel = process.env.VERCEL === '1';
+const dataDir = onVercel ? '/tmp' : __dirname;
 
 // Ensure uploads directory exists
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+const uploadDir = path.join(dataDir, 'uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 // Multer config for profile images, payment screenshots & chat media
 const storage = multer.diskStorage({
@@ -32,15 +34,26 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(uploadDir));
 
+app.set('trust proxy', 1);
 app.use(session({
-  secret: 'block_l_super_secret_key_2026',
+  secret: process.env.SESSION_SECRET || 'block_l_super_secret_key_2026',
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true, maxAge: 24 * 60 * 60 * 1000 }
+  cookie: {
+    httpOnly: true,
+    secure: onVercel,
+    sameSite: 'lax',
+    maxAge: 24 * 60 * 60 * 1000
+  }
 }));
 
-// Initialize SQLite Database
-const db = new sqlite3.Database(path.join(__dirname, 'block_l.db'));
+// Initialize SQLite Database. Vercel’s filesystem is read-only except /tmp.
+const dbPath = path.join(dataDir, 'block_l.db');
+if (onVercel && !fs.existsSync(dbPath)) {
+  const bundledDb = path.join(__dirname, 'block_l.db');
+  if (fs.existsSync(bundledDb)) fs.copyFileSync(bundledDb, dbPath);
+}
+const db = new sqlite3.Database(dbPath);
 
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (
@@ -661,6 +674,10 @@ app.get('/api/notifications', requireAuth, (req, res) => {
   );
 });
 
-server.listen(PORT, () => {
-  console.log(`Block L System running on http://localhost:${PORT}`);
-});
+if (!onVercel) {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Block L System running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = server;
