@@ -2,89 +2,122 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Block L — Announcements & Advice</title>
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body>
   <script src="/js/app.js"></script>
   <script>
+    function loadSocketScript() {
+      return new Promise((resolve) => {
+        const s = document.createElement('script');
+        s.src = `${API_BASE_URL || ''}/socket.io/socket.io.js`;
+        s.onload = resolve;
+        s.onerror = resolve;
+        document.head.appendChild(s);
+      });
+    }
+
     (async () => {
+      await loadSocketScript();
       const user = await initShell('announcements');
       if (!user) return;
-      document.getElementById('pageTitle').textContent = 'Announcements & Resident Advice';
-
-      const res = await fetch('/api/posts');
-      const posts = await res.json();
-      const announcements = posts.filter(p => p.type === 'announcement');
-      const advices = posts.filter(p => p.type === 'advice');
+      document.getElementById('pageTitle').textContent = 'Announcements & Community Advice';
 
       document.getElementById('pageContent').innerHTML = `
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
-          <!-- Official Admin Announcements -->
-          <div>
-            <h3 style="margin-bottom: 14px;">Official Announcements</h3>
-            ${user.role === 'admin' ? `
-              <div class="card" style="margin-bottom: 18px;">
-                <form onsubmit="submitPost(event, 'announcement')">
-                  <div class="form-group">
-                    <label>Announcement Title</label>
-                    <input type="text" id="annTitle" class="form-control" required />
-                  </div>
-                  <div class="form-group">
-                    <label>Message</label>
-                    <textarea id="annBody" rows="3" class="form-control" required></textarea>
-                  </div>
-                  <button type="submit" class="btn btn-primary">Publish Announcement</button>
-                </form>
-              </div>
-            ` : ''}
-            ${announcements.map(a => `
-              <div class="card" style="margin-bottom: 14px; border-left: 4px solid var(--primary);">
-                <div style="font-weight: 700; font-size: 16px;">${a.title}</div>
-                <p style="margin: 8px 0; font-size: 14px; color: var(--text-main);">${a.body}</p>
-                <div style="font-size: 12px; color: var(--text-muted);">Posted by Admin • ${a.created_at}</div>
-              </div>
-            `).join('') || '<p style="color:var(--text-muted);">No announcements yet.</p>'}
-          </div>
-
-          <!-- Community Advice (Open to Everyone) -->
-          <div>
-            <h3 style="margin-bottom: 14px;">Resident Advice & Suggestions</h3>
-            <div class="card" style="margin-bottom: 18px;">
-              <form onsubmit="submitPost(event, 'advice')">
-                <div class="form-group">
-                  <label>Advice Topic</label>
-                  <input type="text" id="advTitle" class="form-control" required />
-                </div>
-                <div class="form-group">
-                  <label>Your Advice</label>
-                  <textarea id="advBody" rows="3" class="form-control" required></textarea>
-                </div>
-                <button type="submit" class="btn btn-primary">Share Advice</button>
-              </form>
+        <div class="card" style="margin-bottom:24px; max-width:720px;">
+          <h3 style="font-size:17px; margin-bottom:12px;">Create a Post</h3>
+          <div id="postAlert" class="alert" style="display:none;"></div>
+          <form id="postForm">
+            <div class="form-group">
+              <label>Category</label>
+              <select id="postType" class="form-control">
+                ${user.role === 'admin' ? '<option value="announcement">Official Admin Announcement</option>' : ''}
+                <option value="advice">Community Advice / Suggestion</option>
+              </select>
             </div>
-            ${advices.map(ad => `
-              <div class="card" style="margin-bottom: 14px;">
-                <div style="font-weight: 700; font-size: 15px;">${ad.title}</div>
-                <p style="margin: 8px 0; font-size: 14px;">${ad.body}</p>
-                <div style="font-size: 12px; color: var(--text-muted);">By ${ad.first_name} ${ad.second_name} (${ad.room})</div>
-              </div>
-            `).join('') || '<p style="color:var(--text-muted);">No advice shared yet.</p>'}
+            <div class="form-group">
+              <label>Title</label>
+              <input type="text" id="postTitle" class="form-control" required />
+            </div>
+            <div class="form-group">
+              <label>Message</label>
+              <textarea id="postBody" rows="3" class="form-control" required></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Publish Post</button>
+          </form>
+        </div>
+
+        <div class="grid-2">
+          <div>
+            <h3 style="font-size:16px; margin-bottom:12px;">Official Announcements</h3>
+            <div id="announcementsFeed" style="display:flex; flex-direction:column; gap:12px;"></div>
+          </div>
+          <div>
+            <h3 style="font-size:16px; margin-bottom:12px;">Community Advice Board</h3>
+            <div id="adviceFeed" style="display:flex; flex-direction:column; gap:12px;"></div>
           </div>
         </div>
       `;
+
+      document.getElementById('postForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const res = await apiFetch('/api/posts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: document.getElementById('postType').value,
+            title: document.getElementById('postTitle').value,
+            body: document.getElementById('postBody').value
+          })
+        });
+        const data = await res.json();
+        const box = document.getElementById('postAlert');
+        if (!res.ok) {
+          box.className = 'alert alert-error';
+          box.textContent = data.error || 'Could not publish post.';
+          box.style.display = 'block';
+          return;
+        }
+        e.target.reset();
+        box.className = 'alert alert-success';
+        box.textContent = 'Published successfully.';
+        box.style.display = 'block';
+        await loadPosts();
+      });
+
+      await loadPosts();
     })();
 
-    async function submitPost(e, type) {
-      e.preventDefault();
-      const title = document.getElementById(type === 'announcement' ? 'annTitle' : 'advTitle').value;
-      const body = document.getElementById(type === 'announcement' ? 'annBody' : 'advBody').value;
-      const res = await fetch('/api/posts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type, title, body })
-      });
-      if (res.ok) location.reload();
+    async function loadPosts() {
+      const res = await apiFetch('/api/posts');
+      if (!res.ok) return;
+      const posts = await res.json();
+
+      const announcements = posts.filter(p => p.type === 'announcement');
+      const advice = posts.filter(p => p.type === 'advice');
+
+      const renderCard = (p) => `
+        <div class="card">
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+            <img src="${assetUrl(p.avatar)}" class="user-avatar-sm" alt="${p.first_name}" />
+            <div>
+              <strong style="font-size:14px;">${p.title}</strong>
+              <div style="font-size:12px; color:var(--text-muted);">${p.first_name} ${p.second_name} (${p.room || 'ADMIN'})</div>
+            </div>
+          </div>
+          <p style="font-size:14px; color:var(--text-main); white-space:pre-line;">${p.body}</p>
+        </div>
+      `;
+
+      document.getElementById('announcementsFeed').innerHTML = announcements.length
+        ? announcements.map(renderCard).join('')
+        : '<div class="card" style="color:var(--text-muted); font-size:13px;">No announcements yet.</div>';
+
+      document.getElementById('adviceFeed').innerHTML = advice.length
+        ? advice.map(renderCard).join('')
+        : '<div class="card" style="color:var(--text-muted); font-size:13px;">No advice posts yet.</div>';
     }
   </script>
 </body>

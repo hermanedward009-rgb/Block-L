@@ -7,13 +7,23 @@
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body>
-  <script src="/socket.io/socket.io.js"></script>
   <script src="/js/app.js"></script>
   <script>
     const ALL_ROOMS = ['R-01','R-02','R-03','R-04','R-05','R-06','R-07','R-08','R-09','R-10'];
     let ALL_ACCOUNTS = [];
 
+    function loadSocketScript() {
+      return new Promise((resolve) => {
+        const s = document.createElement('script');
+        s.src = `${API_BASE_URL || ''}/socket.io/socket.io.js`;
+        s.onload = resolve;
+        s.onerror = resolve;
+        document.head.appendChild(s);
+      });
+    }
+
     (async () => {
+      await loadSocketScript();
       const user = await initShell('all-residents');
       if (!user) return;
       document.getElementById('pageTitle').textContent = 'All Residents & Account Management';
@@ -119,7 +129,7 @@
     })();
 
     async function loadAllAccounts() {
-      const res = await fetch('/api/admin/all-accounts');
+      const res = await apiFetch('/api/admin/all-accounts');
       if (!res.ok) return;
       ALL_ACCOUNTS = await res.json();
       renderAccountsTable();
@@ -148,7 +158,7 @@
 
       tbody.innerHTML = filtered.map(acc => `
         <tr>
-          <td><img src="${acc.avatar}" alt="${acc.first_name}" class="user-avatar-sm" /></td>
+          <td><img src="${assetUrl(acc.avatar)}" alt="${acc.first_name}" class="user-avatar-sm" /></td>
           <td><strong>${acc.first_name} ${acc.second_name}</strong></td>
           <td>${acc.phone}</td>
           <td><span class="badge badge-primary">${acc.room || 'ADMIN'}</span></td>
@@ -207,7 +217,7 @@
         password: document.getElementById('editPassword').value
       };
 
-      const res = await fetch(`/api/admin/accounts/${id}`, {
+      const res = await apiFetch(`/api/admin/accounts/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -229,7 +239,7 @@
     }
 
     async function deleteAccount(id) {
-      const res = await fetch(`/api/admin/accounts/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/admin/accounts/${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) {
         alert(data.error || 'Could not delete account.');

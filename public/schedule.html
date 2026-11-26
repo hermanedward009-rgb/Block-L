@@ -2,70 +2,109 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Block L — Toilet Cleaning Schedule</title>
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body>
   <script src="/js/app.js"></script>
   <script>
+    function loadSocketScript() {
+      return new Promise((resolve) => {
+        const s = document.createElement('script');
+        s.src = `${API_BASE_URL || ''}/socket.io/socket.io.js`;
+        s.onload = resolve;
+        s.onerror = resolve;
+        document.head.appendChild(s);
+      });
+    }
+
+    let RESIDENTS = [];
+
     (async () => {
+      await loadSocketScript();
       const user = await initShell('schedule');
       if (!user) return;
-      document.getElementById('pageTitle').textContent = 'Permanent Toilet Cleaning Timetable';
-
-      const [schedRes, memRes] = await Promise.all([fetch('/api/schedule'), fetch('/api/members')]);
-      const schedule = await schedRes.json();
-      const members = await memRes.json();
+      document.getElementById('pageTitle').textContent = 'Weekly Toilet Cleaning Schedule';
 
       document.getElementById('pageContent').innerHTML = `
+        <div id="schedAlert" class="alert alert-success" style="display:none;"></div>
         <div class="card">
-          <table>
-            <thead>
-              <tr>
-                <th>Day</th>
-                <th>Facility</th>
-                <th>Assigned Resident</th>
-                ${user.role === 'admin' ? '<th>Admin Assignment</th>' : ''}
-              </tr>
-            </thead>
-            <tbody>
-              ${schedule.map(slot => `
+          <div style="margin-bottom:16px;">
+            <h3 style="font-size:17px;">Permanent Weekly Timetable (Large & Small Toilets)</h3>
+            <p style="font-size:13px; color:var(--text-muted); margin-top:2px;">
+              ${user.role === 'admin' ? 'Assign or update residents for each weekly cleaning slot.' : 'View assigned cleaners for both Block L toilets.'}
+            </p>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
                 <tr>
-                  <td><strong>${slot.day_name}</strong></td>
-                  <td><span class="badge ${slot.toilet_type === 'Large Toilet' ? 'badge-primary' : 'badge-warning'}">${slot.toilet_type}</span></td>
-                  <td>
-                    ${slot.first_name ? `
-                      <div style="display:flex;align-items:center;gap:10px;">
-                        <img src="${slot.avatar}" class="user-avatar-sm" />
-                        <span>${slot.first_name} ${slot.second_name} (${slot.room})</span>
-                      </div>
-                    ` : '<span style="color:var(--text-muted);">Unassigned</span>'}
-                  </td>
-                  ${user.role === 'admin' ? `
-                    <td>
-                      <select class="form-control" style="max-width:240px;" onchange="assignSlot(${slot.id}, this.value)">
-                        <option value="">-- Select Resident --</option>
-                        ${members.filter(m => m.role === 'resident').map(m =>
-                          `<option value="${m.id}" ${slot.assigned_user_id === m.id ? 'selected' : ''}>${m.first_name} ${m.second_name} (${m.room})</option>`
-                        ).join('')}
-                      </select>
-                    </td>
-                  ` : ''}
+                  <th>Day</th>
+                  <th>Toilet</th>
+                  <th>Assigned Cleaner</th>
+                  ${user.role === 'admin' ? '<th>Assign Resident</th>' : ''}
                 </tr>
-              `).join('')}
-            </tbody>
-          </table>
+              </thead>
+              <tbody id="scheduleBody">
+                <tr><td colspan="4">Loading schedule...</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       `;
+
+      await loadScheduleData();
     })();
 
-    async function assignSlot(scheduleId, userId) {
-      await fetch('/api/schedule/assign', {
+    async function loadScheduleData() {
+      const [schedRes, memRes] = await Promise.all([
+        apiFetch('/api/schedule'),
+        apiFetch('/api/members')
+      ]);
+      const slots = schedRes.ok ? await schedRes.json() : [];
+      const members = memRes.ok ? await memRes.json() : [];
+      RESIDENTS = members.filter(m => m.role === 'resident');
+
+      const tbody = document.getElementById('scheduleBody');
+      tbody.innerHTML = slots.map(slot => `
+        <tr>
+          <td><strong>${slot.day_name}</strong></td>
+          <td><span class="badge ${slot.toilet_type === 'Large Toilet' ? 'badge-primary' : 'badge-success'}">${slot.toilet_type}</span></td>
+          <td>
+            ${slot.first_name
+              ? `<div style="display:flex; align-items:center; gap:8px;">
+                   <img src="${assetUrl(slot.avatar)}" class="user-avatar-sm" alt="${slot.first_name}" />
+                   <span><strong>${slot.first_name} ${slot.second_name}</strong> (${slot.room})</span>
+                 </div>`
+              : '<span style="color:var(--text-muted);">Unassigned</span>'}
+          </td>
+          ${CURRENT_USER.role === 'admin' ? `
+            <td>
+              <select class="form-control" style="max-width:240px;" onchange="assignCleaner(${slot.id}, this.value)">
+                <option value="">-- Unassigned --</option>
+                ${RESIDENTS.map(r => `
+                  <option value="${r.id}" ${Number(slot.assigned_user_id) === Number(r.id) ? 'selected' : ''}>
+                    ${r.first_name} ${r.second_name} (${r.room})
+                  </option>
+                `).join('')}
+              </select>
+            </td>
+          ` : ''}
+        </tr>
+      `).join('');
+    }
+
+    async function assignCleaner(scheduleId, userId) {
+      await apiFetch('/api/schedule/assign', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ schedule_id: scheduleId, user_id: userId })
+        body: JSON.stringify({ schedule_id: scheduleId, user_id: userId || null })
       });
-      location.reload();
+      const box = document.getElementById('schedAlert');
+      box.textContent = 'Schedule updated.';
+      box.style.display = 'block';
+      await loadScheduleData();
     }
   </script>
 </body>

@@ -186,4 +186,159 @@
     }
   </script>
 </body>
+</html><!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Block L — Dashboard</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <script src="/js/app.js"></script>
+  <script>
+    const ROOMS = ['R-01','R-02','R-03','R-04','R-05','R-06','R-07','R-08','R-09','R-10'];
+
+    function loadSocketScript() {
+      return new Promise((resolve) => {
+        const s = document.createElement('script');
+        s.src = `${API_BASE_URL || ''}/socket.io/socket.io.js`;
+        s.onload = resolve;
+        s.onerror = resolve;
+        document.head.appendChild(s);
+      });
+    }
+
+    (async () => {
+      await loadSocketScript();
+      const user = await initShell('dashboard');
+      if (!user) return;
+      document.getElementById('pageTitle').textContent = 'Dashboard Overview';
+
+      const [membersRes, elecRes, schedRes, postsRes] = await Promise.all([
+        apiFetch('/api/members'),
+        apiFetch('/api/electricity'),
+        apiFetch('/api/schedule'),
+        apiFetch('/api/posts')
+      ]);
+
+      const members = membersRes.ok ? await membersRes.json() : [];
+      const elec = elecRes.ok ? await elecRes.json() : { currentRound: 1, paidRooms: [], remainingCount: 10, reminderActive: false };
+      const schedule = schedRes.ok ? await schedRes.json() : [];
+      const posts = postsRes.ok ? await postsRes.json() : [];
+
+      const residentsOnly = members.filter(m => m.role === 'resident');
+      const todayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+      const todayDuties = schedule.filter(s => s.day_name === todayName);
+      const latestAnnouncement = posts.find(p => p.type === 'announcement');
+
+      document.getElementById('pageContent').innerHTML = `
+        ${elec.reminderActive ? `
+          <div class="alert alert-warning">
+            <strong>Electricity Reminder:</strong> Only ${elec.remainingCount} room(s) remain to complete Round #${elec.currentRound}.
+          </div>
+        ` : ''}
+
+        <div class="grid-4" style="margin-bottom:24px;">
+          <div class="card">
+            <div style="font-size:12px; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Approved Residents</div>
+            <div style="font-size:28px; font-weight:800; margin-top:6px;">${residentsOnly.length} <span style="font-size:14px; font-weight:500; color:var(--text-muted);">/ 20</span></div>
+          </div>
+          <div class="card">
+            <div style="font-size:12px; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Electricity Round #${elec.currentRound}</div>
+            <div style="font-size:28px; font-weight:800; margin-top:6px;">${elec.paidRooms.length} <span style="font-size:14px; font-weight:500; color:var(--text-muted);">/ 10 Paid</span></div>
+          </div>
+          <div class="card">
+            <div style="font-size:12px; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Today (${todayName})</div>
+            <div style="font-size:14px; font-weight:600; margin-top:8px;">
+              ${todayDuties.map(d => `${d.toilet_type}: ${d.first_name ? d.first_name + ' (' + d.room + ')' : 'Unassigned'}`).join('<br/>') || 'No schedule'}
+            </div>
+          </div>
+          <div class="card">
+            <div style="font-size:12px; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Latest Notice</div>
+            <div style="font-size:14px; font-weight:600; margin-top:8px;">
+              ${latestAnnouncement ? latestAnnouncement.title : 'No announcements posted yet'}
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom:24px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+            <h3 style="font-size:16px;">Block L Rooms Status (R-01 to R-10)</h3>
+            <span style="font-size:12px; color:var(--text-muted);">Green = Electricity Paid (Round #${elec.currentRound})</span>
+          </div>
+          <div class="room-grid">
+            ${ROOMS.map(rm => {
+              const roomMembers = residentsOnly.filter(m => m.room === rm);
+              const isPaid = elec.paidRooms.includes(rm);
+              return `
+                <div class="room-tile ${isPaid ? 'paid' : 'unpaid'}">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                    <strong>${rm}</strong>
+                    <span class="badge ${isPaid ? 'badge-success' : 'badge-warning'}">${isPaid ? 'Paid' : 'Pending'}</span>
+                  </div>
+                  <div style="font-size:12px; color:var(--text-muted);">
+                    ${roomMembers.length ? roomMembers.map(m => `${m.first_name} ${m.second_name}`).join('<br/>') : 'Vacant (0/2)'}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+
+        ${user.role === 'admin' ? `
+          <div class="card">
+            <h3 style="font-size:16px; margin-bottom:12px;">Pending Account Approvals</h3>
+            <div id="pendingList">Loading pending registrations...</div>
+          </div>
+        ` : ''}
+      `;
+
+      if (user.role === 'admin') loadPendingApprovals();
+    })();
+
+    async function loadPendingApprovals() {
+      const res = await apiFetch('/api/admin/pending-users');
+      if (!res.ok) return;
+      const pending = await res.json();
+      const box = document.getElementById('pendingList');
+      if (!pending.length) {
+        box.innerHTML = '<p style="font-size:13px; color:var(--text-muted);">No registrations awaiting approval.</p>';
+        return;
+      }
+      box.innerHTML = `
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Photo</th><th>Resident</th><th>Phone</th><th>Room</th><th>Decision</th></tr>
+            </thead>
+            <tbody>
+              ${pending.map(u => `
+                <tr>
+                  <td><img src="${assetUrl(u.avatar)}" class="user-avatar-sm" alt="${u.first_name}" /></td>
+                  <td><strong>${u.first_name} ${u.second_name}</strong></td>
+                  <td>${u.phone}</td>
+                  <td><span class="badge badge-primary">${u.room}</span></td>
+                  <td style="display:flex; gap:8px;">
+                    <button class="btn btn-primary" style="padding:6px 12px; font-size:12px;" onclick="decideUser(${u.id}, 'approve')">Approve</button>
+                    <button class="btn btn-danger" style="padding:6px 12px; font-size:12px;" onclick="decideUser(${u.id}, 'reject')">Reject</button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    async function decideUser(id, action) {
+      await apiFetch(`/api/admin/approve-user/${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      });
+      loadPendingApprovals();
+    }
+  </script>
+</body>
 </html>

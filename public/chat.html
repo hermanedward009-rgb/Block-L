@@ -7,140 +7,215 @@
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body>
-  <script src="/socket.io/socket.io.js"></script>
   <script src="/js/app.js"></script>
   <script>
-    let activePeer = 'group';
-    let me = null;
+    let ACTIVE_PEER = 'group';
+    let MEMBERS = [];
+
+    function loadSocketScript() {
+      return new Promise((resolve) => {
+        const s = document.createElement('script');
+        s.src = `${API_BASE_URL || ''}/socket.io/socket.io.js`;
+        s.onload = resolve;
+        s.onerror = resolve;
+        document.head.appendChild(s);
+      });
+    }
 
     (async () => {
-      me = await initShell('chat');
-      if (!me) return;
-      document.getElementById('pageTitle').textContent = 'Block L Residents & Chat';
-
-      const res = await fetch('/api/members');
-      const members = await res.json();
+      await loadSocketScript();
+      const user = await initShell('chat');
+      if (!user) return;
+      document.getElementById('pageTitle').textContent = 'Residents & Live Chat';
 
       document.getElementById('pageContent').innerHTML = `
-        <div class="chat-layout">
-          <div class="card chat-sidebar-card" style="overflow-y: auto; padding: 14px;">
-            <div style="font-weight: 700; font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">CONVERSATIONS</div>
-            <div onclick="selectChat('group', 'Block L Group Chat')" class="nav-item active" id="peer-group" style="cursor: pointer; margin-bottom: 8px;">
-              🏢 Block L Group Chat
+        <div class="card chat-layout">
+          <div class="chat-sidebar">
+            <div style="margin-bottom:12px;">
+              <h3 style="font-size:15px;">Block L Directory</h3>
+              <p style="font-size:12px; color:var(--text-muted); margin-top:2px;">Group channel or direct message</p>
             </div>
-            <div style="font-weight: 700; font-size: 12px; color: var(--text-muted); margin: 14px 0 8px;">MEMBERS & ADMIN</div>
-            ${members.filter(m => m.id !== me.id).map(m => `
-              <div onclick="selectChat(${m.id}, '${m.first_name} ${m.second_name} (${m.room})')" id="peer-${m.id}" class="nav-item" style="cursor: pointer;">
-                <img src="${m.avatar}" class="user-avatar-sm" />
-                <div>
-                  <div style="font-weight: 600; font-size: 13px;">${m.first_name} ${m.second_name}</div>
-                  <div style="font-size: 11px;">${m.role === 'admin' ? 'Admin' : m.room}</div>
-                </div>
-              </div>
-            `).join('')}
+            <input type="text" id="memberSearch" class="form-control" style="margin-bottom:10px; padding:8px 10px; font-size:13px;" placeholder="Filter residents..." oninput="renderPeerList()" />
+            <div id="peerList" style="display:flex; flex-direction:column; gap:6px; max-height:420px; overflow-y:auto;"></div>
           </div>
 
-          <div class="card chat-window-card" style="display: flex; flex-direction: column; justify-content: space-between; padding: 0;">
-            <div style="padding: 15px 20px; border-bottom: 1px solid var(--border); font-weight: 700;" id="chatHeader">
-              Block L Group Chat
+          <div style="display:flex; flex-direction:column; justify-content:space-between; min-width:0;">
+            <div>
+              <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:1px solid var(--border); margin-bottom:14px;">
+                <div>
+                  <div id="chatHeader" style="font-weight:700; font-size:16px;">Block L Group Chat</div>
+                  <div id="chatSubheader" style="font-size:12px; color:var(--text-muted);">All approved residents & Admin</div>
+                </div>
+                <span class="badge badge-primary" id="chatModeBadge">Group</span>
+              </div>
+              <div id="chatMessages" class="chat-stream"></div>
             </div>
-            <div id="chatMessages" style="flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 12px;"></div>
-            <form id="chatForm" enctype="multipart/form-data" style="padding: 12px 14px; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: center;">
-              <label class="btn btn-outline" style="padding: 10px 12px; cursor: pointer;" title="Share Photo or File">
-                📎
-                <input type="file" id="mediaInput" name="media" accept="image/*,.pdf,.doc,.docx" style="display: none;" />
+
+            <form id="chatForm" enctype="multipart/form-data" style="display:flex; gap:8px; margin-top:14px; padding-top:12px; border-top:1px solid var(--border); align-items:center; flex-wrap:wrap;">
+              <input type="text" id="chatInput" class="form-control" style="flex:1; min-width:180px;" placeholder="Write a message..." />
+              <label class="btn btn-outline" style="padding:9px 12px; font-size:13px; cursor:pointer; margin:0;">
+                Attach
+                <input type="file" id="chatMedia" name="media" accept="image/*,video/*,.pdf,.doc,.docx" style="display:none;" onchange="updateAttachLabel(this)" />
               </label>
-              <input type="text" id="chatInput" class="form-control" placeholder="Type a message..." />
+              <span id="attachName" style="font-size:12px; color:var(--text-muted); max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
               <button type="submit" class="btn btn-primary">Send</button>
             </form>
           </div>
         </div>
       `;
 
-      loadMessages();
-
-      if (SOCKET_CLIENT) {
-        SOCKET_CLIENT.on('chat:message', (msg) => {
-          const isGroupMsg = activePeer === 'group' && !msg.receiver_id;
-          const isDirectMsg = activePeer !== 'group' && (
-            (msg.sender_id === Number(activePeer) && msg.receiver_id === me.id) ||
-            (msg.sender_id === me.id && msg.receiver_id === Number(activePeer))
-          );
-          if (isGroupMsg || isDirectMsg) {
-            appendMessage(msg);
-          }
-        });
-      }
-
-      document.getElementById('chatForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const input = document.getElementById('chatInput');
-        const fileInput = document.getElementById('mediaInput');
-        if (!input.value.trim() && !fileInput.files[0]) return;
-
-        const formData = new FormData();
-        formData.append('receiver_id', activePeer);
-        formData.append('content', input.value.trim());
-        if (fileInput.files[0]) {
-          formData.append('media', fileInput.files[0]);
-        }
-
-        const res = await fetch('/api/messages', { method: 'POST', body: formData });
-        if (res.ok) {
-          input.value = '';
-          fileInput.value = '';
-        }
-      });
+      document.getElementById('chatForm').addEventListener('submit', sendChatMessage);
+      await loadMembers();
+      await loadMessages();
+      bindChatSocketEvents();
     })();
 
-    function selectChat(peerId, title) {
-      activePeer = peerId;
+    function updateAttachLabel(input) {
+      const label = document.getElementById('attachName');
+      if (!label) return;
+      label.textContent = input.files && input.files[0] ? input.files[0].name : '';
+    }
+
+    async function loadMembers() {
+      const res = await apiFetch('/api/members');
+      if (!res.ok) return;
+      MEMBERS = await res.json();
+      renderPeerList();
+    }
+
+    function renderPeerList() {
+      const list = document.getElementById('peerList');
+      if (!list) return;
+      const q = (document.getElementById('memberSearch')?.value || '').toLowerCase().trim();
+
+      const groupBtn = `
+        <button type="button" class="btn ${ACTIVE_PEER === 'group' ? 'btn-primary' : 'btn-outline'}" style="justify-content:space-between; width:100%; padding:9px 12px;" onclick="selectPeer('group', 'Block L Group Chat', 'All approved residents & Admin', 'Group')">
+          <span>Block L Group Chat</span>
+          <span class="badge ${ACTIVE_PEER === 'group' ? 'badge-success' : 'badge-primary'}">${MEMBERS.length}</span>
+        </button>
+      `;
+
+      const otherMembers = MEMBERS.filter(m => m.id !== CURRENT_USER.id).filter(m => {
+        const hay = `${m.first_name} ${m.second_name} ${m.room || ''} ${m.role}`.toLowerCase();
+        return hay.includes(q);
+      });
+
+      const memberBtns = otherMembers.map(m => {
+        const isSelected = String(ACTIVE_PEER) === String(m.id);
+        const roomLabel = m.role === 'admin' ? 'ADMIN' : m.room;
+        return `
+          <button type="button" class="btn ${isSelected ? 'btn-primary' : 'btn-outline'}" style="justify-content:space-between; width:100%; padding:8px 10px;" onclick="selectPeer(${m.id}, '${m.first_name} ${m.second_name}', 'Direct message (${roomLabel})', 'Direct')">
+            <span style="display:flex; align-items:center; gap:8px; min-width:0;">
+              <img src="${assetUrl(m.avatar)}" alt="${m.first_name}" class="user-avatar-sm" />
+              <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px;">${m.first_name} ${m.second_name}</span>
+            </span>
+            <span class="badge badge-primary">${roomLabel}</span>
+          </button>
+        `;
+      }).join('');
+
+      list.innerHTML = groupBtn + memberBtns;
+    }
+
+    async function selectPeer(peerId, title, subtitle, modeText) {
+      ACTIVE_PEER = peerId;
       document.getElementById('chatHeader').textContent = title;
-      document.querySelectorAll('[id^="peer-"]').forEach(el => el.classList.remove('active'));
-      const activeEl = document.getElementById(`peer-${peerId}`);
-      if (activeEl) activeEl.classList.add('active');
-      loadMessages();
+      document.getElementById('chatSubheader').textContent = subtitle;
+      document.getElementById('chatModeBadge').textContent = modeText;
+      renderPeerList();
+      await loadMessages();
     }
 
-    function renderMedia(url) {
-      if (!url) return '';
-      const isImage = /\.(png|jpe?g|gif|webp)$/i.test(url);
-      if (isImage) {
-        return `<img src="${url}" alt="Shared media" class="chat-media-img" />`;
+    function renderMediaAttachment(mediaUrl) {
+      if (!mediaUrl) return '';
+      const fullUrl = assetUrl(mediaUrl);
+      if (/\.(png|jpe?g|gif|webp)$/i.test(mediaUrl)) {
+        return `<div style="margin-top:8px;"><img src="${fullUrl}" alt="Attachment" style="max-width:240px; border-radius:8px; border:1px solid var(--border);" /></div>`;
       }
-      return `<a href="${url}" target="_blank" class="chat-media-file">📄 Download Attachment</a>`;
+      return `<div style="margin-top:8px;"><a href="${fullUrl}" target="_blank" rel="noopener noreferrer" class="badge badge-primary" style="padding:5px 10px;">Open Attached File</a></div>`;
     }
 
-    function appendMessage(m) {
+    function appendMessageNode(msg) {
       const box = document.getElementById('chatMessages');
       if (!box) return;
-      const isMe = m.sender_id === me.id;
-      const wrap = document.createElement('div');
-      wrap.style.alignSelf = isMe ? 'flex-end' : 'flex-start';
-      wrap.style.maxWidth = '75%';
-      wrap.innerHTML = `
-        <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 3px; text-align: ${isMe ? 'right' : 'left'};">
-          ${m.first_name} (${m.room})
+      const isMine = msg.sender_id === CURRENT_USER.id;
+      const div = document.createElement('div');
+      div.style.padding = '11px 14px';
+      div.style.borderRadius = '12px';
+      div.style.border = '1px solid var(--border)';
+      div.style.background = isMine ? 'var(--primary-soft)' : 'var(--bg-page)';
+      div.style.alignSelf = isMine ? 'flex-end' : 'flex-start';
+      div.style.maxWidth = '82%';
+
+      const timeStr = msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+      div.innerHTML = `
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+          <img src="${assetUrl(msg.avatar)}" alt="${msg.first_name}" class="user-avatar-sm" />
+          <strong style="font-size:13px;">${msg.first_name} ${msg.second_name}</strong>
+          <span class="badge badge-primary">${msg.room || 'ADMIN'}</span>
+          ${timeStr ? `<span style="font-size:11px; color:var(--text-muted); margin-left:auto;">${timeStr}</span>` : ''}
         </div>
-        <div style="padding: 10px 14px; border-radius: 12px; font-size: 14px; word-break: break-word;
-          background: ${isMe ? 'var(--primary)' : 'var(--bg-subtle)'};
-          color: ${isMe ? '#ffffff' : 'var(--text-main)'};
-          border: 1px solid ${isMe ? 'var(--primary)' : 'var(--border)'};">
-          ${m.content ? `<div>${m.content}</div>` : ''}
-          ${renderMedia(m.media_url)}
-        </div>
+        ${msg.content ? `<div style="font-size:14px; white-space:pre-line;">${msg.content}</div>` : ''}
+        ${renderMediaAttachment(msg.media_url)}
       `;
-      box.appendChild(wrap);
+      box.appendChild(div);
       box.scrollTop = box.scrollHeight;
     }
 
     async function loadMessages() {
-      const res = await fetch(`/api/messages?peerId=${activePeer}`);
-      const msgs = await res.json();
       const box = document.getElementById('chatMessages');
       if (!box) return;
       box.innerHTML = '';
-      msgs.forEach(appendMessage);
+      const res = await apiFetch(`/api/messages?peerId=${encodeURIComponent(ACTIVE_PEER)}`);
+      if (!res.ok) return;
+      const rows = await res.json();
+      if (!rows.length) {
+        box.innerHTML = '<div style="font-size:13px; color:var(--text-muted); text-align:center; padding:24px 0;">No messages in this conversation yet.</div>';
+        return;
+      }
+      rows.forEach(appendMessageNode);
+    }
+
+    async function sendChatMessage(e) {
+      e.preventDefault();
+      const input = document.getElementById('chatInput');
+      const fileInput = document.getElementById('chatMedia');
+      const text = input.value.trim();
+      const file = fileInput.files[0];
+
+      if (!text && !file) return;
+
+      const formData = new FormData();
+      formData.append('receiver_id', ACTIVE_PEER);
+      formData.append('content', text);
+      if (file) formData.append('media', file);
+
+      const res = await apiFetch('/api/messages', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (res.ok) {
+        input.value = '';
+        fileInput.value = '';
+        updateAttachLabel(fileInput);
+      }
+    }
+
+    function bindChatSocketEvents() {
+      if (!SOCKET_CLIENT) return;
+      SOCKET_CLIENT.on('chat:message', (msg) => {
+        const isGroupMatch = ACTIVE_PEER === 'group' && (msg.receiver_id === null || msg.receiver_id === undefined);
+        const isDmMatch = ACTIVE_PEER !== 'group' && (
+          (msg.sender_id === CURRENT_USER.id && Number(msg.receiver_id) === Number(ACTIVE_PEER)) ||
+          (Number(msg.sender_id) === Number(ACTIVE_PEER) && Number(msg.receiver_id) === CURRENT_USER.id)
+        );
+        if (isGroupMatch || isDmMatch) {
+          const emptyPlaceholder = document.querySelector('#chatMessages > div[style*="text-align:center"]');
+          if (emptyPlaceholder) emptyPlaceholder.remove();
+          appendMessageNode(msg);
+        }
+      });
     }
   </script>
 </body>

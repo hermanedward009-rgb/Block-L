@@ -2,75 +2,82 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Block L — Electricity Bills</title>
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body>
   <script src="/js/app.js"></script>
   <script>
+    const ALL_ROOMS = ['R-01','R-02','R-03','R-04','R-05','R-06','R-07','R-08','R-09','R-10'];
+
+    function loadSocketScript() {
+      return new Promise((resolve) => {
+        const s = document.createElement('script');
+        s.src = `${API_BASE_URL || ''}/socket.io/socket.io.js`;
+        s.onload = resolve;
+        s.onerror = resolve;
+        document.head.appendChild(s);
+      });
+    }
+
     (async () => {
+      await loadSocketScript();
       const user = await initShell('electricity');
       if (!user) return;
-      document.getElementById('pageTitle').textContent = 'Electricity Payment & Round Tracker';
-
-      const res = await fetch('/api/electricity');
-      const data = await res.json();
-      const rooms = ['R-01','R-02','R-03','R-04','R-05','R-06','R-07','R-08','R-09','R-10'];
+      document.getElementById('pageTitle').textContent = 'Electricity Bills & Rounds';
 
       document.getElementById('pageContent').innerHTML = `
-        ${data.reminderActive ? `<div class="alert alert-warning" style="display:block;">⚡ Reminder: Only <strong>${data.remainingCount} rooms</strong> remain in Round #${data.currentRound}!</div>` : ''}
+        <div id="elecBanner"></div>
 
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-          <h3>Round #${data.currentRound} Status (${data.paidRooms.length}/10 Paid)</h3>
-          ${user.role === 'admin' ? `<button class="btn btn-outline" onclick="startNextRound()">Start Next Round</button>` : ''}
-        </div>
-
-        <div class="grid-cards" style="grid-template-columns: repeat(5, 1fr);">
-          ${rooms.map(rm => {
-            const paid = data.paidRooms.includes(rm);
-            return `
-              <div class="card" style="padding: 14px; text-align:center;">
-                <div style="font-weight:700;">${rm}</div>
-                <span class="badge ${paid ? 'badge-success' : 'badge-warning'}" style="margin-top:6px;">
-                  ${paid ? 'PAID' : 'WAITING'}
-                </span>
-              </div>
-            `;
-          }).join('')}
-        </div>
-
-        <div style="display:grid; grid-template-columns: 380px 1fr; gap: 24px;">
+        <div class="grid-2" style="margin-bottom:24px;">
           <div class="card">
-            <h3 style="margin-bottom: 14px;">Submit Electricity Payment</h3>
+            <h3 style="font-size:17px; margin-bottom:14px;">Submit Electricity Payment</h3>
+            <div id="elecFormMsg" class="alert" style="display:none;"></div>
             <form id="elecForm" enctype="multipart/form-data">
               <div class="form-group">
-                <label>Name of Person Who Paid</label>
-                <input type="text" name="payer_name" value="${user.first_name} ${user.second_name}" class="form-control" required />
-              </div>
-              <div class="form-group">
-                <label>Room Number</label>
+                <label>Room</label>
                 <select name="room" class="form-control" required>
-                  ${rooms.map(r => `<option value="${r}" ${user.room === r ? 'selected' : ''}>${r}</option>`).join('')}
+                  ${ALL_ROOMS.map(r => `<option value="${r}" ${user.room === r ? 'selected' : ''}>${r}</option>`).join('')}
                 </select>
               </div>
               <div class="form-group">
-                <label>Amount Paid</label>
-                <input type="number" name="amount" class="form-control" required />
+                <label>Payer Name</label>
+                <input type="text" name="payer_name" value="${user.first_name} ${user.second_name}" class="form-control" required />
+              </div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                <div class="form-group">
+                  <label>Amount Paid</label>
+                  <input type="number" step="0.01" name="amount" class="form-control" required />
+                </div>
+                <div class="form-group">
+                  <label>LUKU / Meter Token</label>
+                  <input type="text" name="token" class="form-control" required />
+                </div>
               </div>
               <div class="form-group">
-                <label>Electricity Token</label>
-                <input type="text" name="token" class="form-control" required />
-              </div>
-              <div class="form-group">
-                <label>Transaction Screenshot (Required)</label>
+                <label>Transaction Screenshot</label>
                 <input type="file" name="screenshot" accept="image/*" class="form-control" required />
               </div>
-              <button type="submit" class="btn btn-primary" style="width:100%;">Submit Payment</button>
+              <button type="submit" class="btn btn-primary">Submit Payment</button>
             </form>
           </div>
 
           <div class="card">
-            <h3 style="margin-bottom: 14px;">Transaction Records</h3>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+              <div>
+                <h3 id="roundHeading" style="font-size:17px;">Current Round Status</h3>
+                <p id="roundSubtext" style="font-size:13px; color:var(--text-muted); margin-top:2px;"></p>
+              </div>
+              ${user.role === 'admin' ? `<button class="btn btn-outline" style="font-size:12px;" onclick="startNextRound()">Start Next Round</button>` : ''}
+            </div>
+            <div id="roundRoomsGrid" class="room-grid" style="grid-template-columns:repeat(2, 1fr);"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 style="font-size:17px; margin-bottom:14px;">Payment Submissions History</h3>
+          <div class="table-wrap">
             <table>
               <thead>
                 <tr>
@@ -81,27 +88,11 @@
                   <th>Token</th>
                   <th>Receipt</th>
                   <th>Status</th>
+                  ${user.role === 'admin' ? '<th>Action</th>' : ''}
                 </tr>
               </thead>
-              <tbody>
-                ${data.bills.filter(b => b.status !== 'system').map(b => `
-                  <tr>
-                    <td>#${b.round_number}</td>
-                    <td><strong>${b.room}</strong></td>
-                    <td>${b.payer_name}</td>
-                    <td>${b.amount}</td>
-                    <td><code>${b.token}</code></td>
-                    <td><a href="${b.screenshot}" target="_blank" style="color:var(--primary);">View</a></td>
-                    <td>
-                      ${b.status === 'approved'
-                        ? '<span class="badge badge-success">Approved</span>'
-                        : user.role === 'admin'
-                          ? `<button class="btn btn-primary" style="padding:6px 10px;font-size:12px;" onclick="approveBill(${b.id})">Approve</button>`
-                          : '<span class="badge badge-warning">Pending Admin</span>'
-                      }
-                    </td>
-                  </tr>
-                `).join('')}
+              <tbody id="billsTableBody">
+                <tr><td colspan="8">Loading bills...</td></tr>
               </tbody>
             </table>
           </div>
@@ -111,19 +102,83 @@
       document.getElementById('elecForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         const formData = new FormData(e.target);
-        const res = await fetch('/api/electricity', { method: 'POST', body: formData });
-        if (res.ok) location.reload();
+        const res = await apiFetch('/api/electricity', { method: 'POST', body: formData });
+        const data = await res.json();
+        const box = document.getElementById('elecFormMsg');
+        if (!res.ok) {
+          box.className = 'alert alert-error';
+          box.textContent = data.error || 'Submission failed.';
+          box.style.display = 'block';
+          return;
+        }
+        e.target.reset();
+        box.className = 'alert alert-success';
+        box.textContent = 'Payment submitted for Admin verification.';
+        box.style.display = 'block';
+        await loadElectricity();
       });
+
+      await loadElectricity();
     })();
 
+    async function loadElectricity() {
+      const res = await apiFetch('/api/electricity');
+      if (!res.ok) return;
+      const data = await res.json();
+
+      document.getElementById('roundHeading').textContent = `Electricity Round #${data.currentRound}`;
+      document.getElementById('roundSubtext').textContent = `${data.paidRooms.length}/10 rooms verified (${data.remainingCount} remaining)`;
+
+      const banner = document.getElementById('elecBanner');
+      banner.innerHTML = data.reminderActive
+        ? `<div class="alert alert-warning"><strong>Reminder:</strong> Only ${data.remainingCount} room(s) remain to complete Round #${data.currentRound}!</div>`
+        : '';
+
+      document.getElementById('roundRoomsGrid').innerHTML = ALL_ROOMS.map(rm => {
+        const paid = data.paidRooms.includes(rm);
+        return `
+          <div class="room-tile ${paid ? 'paid' : 'unpaid'}" style="padding:10px 12px; display:flex; justify-content:space-between; align-items:center;">
+            <strong>${rm}</strong>
+            <span class="badge ${paid ? 'badge-success' : 'badge-warning'}">${paid ? 'Paid' : 'Pending'}</span>
+          </div>
+        `;
+      }).join('');
+
+      const visibleBills = data.bills.filter(b => b.room !== 'SYSTEM');
+      const tbody = document.getElementById('billsTableBody');
+      if (!visibleBills.length) {
+        tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text-muted);">No payments submitted yet.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = visibleBills.map(b => `
+        <tr>
+          <td>#${b.round_number}</td>
+          <td><strong>${b.room}</strong></td>
+          <td>${b.payer_name}</td>
+          <td>${Number(b.amount).toLocaleString()}</td>
+          <td><code>${b.token}</code></td>
+          <td>${b.screenshot ? `<a href="${assetUrl(b.screenshot)}" target="_blank" rel="noopener noreferrer" style="color:var(--primary); font-weight:600;">View</a>` : '—'}</td>
+          <td><span class="badge ${b.status === 'approved' ? 'badge-success' : 'badge-warning'}">${b.status}</span></td>
+          ${CURRENT_USER.role === 'admin' ? `
+            <td>
+              ${b.status !== 'approved'
+                ? `<button class="btn btn-primary" style="padding:5px 10px; font-size:12px;" onclick="approveBill(${b.id})">Approve</button>`
+                : '—'}
+            </td>
+          ` : ''}
+        </tr>
+      `).join('');
+    }
+
     async function approveBill(id) {
-      await fetch(`/api/electricity/approve/${id}`, { method: 'POST' });
-      location.reload();
+      await apiFetch(`/api/electricity/approve/${id}`, { method: 'POST' });
+      await loadElectricity();
     }
 
     async function startNextRound() {
-      await fetch('/api/electricity/next-round', { method: 'POST' });
-      location.reload();
+      await apiFetch('/api/electricity/next-round', { method: 'POST' });
+      await loadElectricity();
     }
   </script>
 </body>
